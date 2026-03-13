@@ -1,0 +1,36 @@
+# Systematic Alpha Research Pipeline — Dependencies
+# All packages are free and open-source.
+#
+# Install with:
+#   pip install -r requirements.txt
+#
+# Python 3.11+ required.
+
+# ── Data & numerics ──────────────────────────────────────────────────────────
+pandas>=2.1.0
+numpy>=1.26.0
+yfinance>=0.2.40
+
+# ── Machine learning ─────────────────────────────────────────────────────────
+scikit-learn>=1.4.0
+joblib>=1.3.0
+lightgbm>=4.3.0          # 10x faster than sklearn GBM, better accuracy
+optuna>=3.6.0             # Bayesian hyperparameter optimisation
+
+# ── Experiment tracking ───────────────────────────────────────────────────────
+mlflow>=2.12.0            # tracks runs, metrics, models — UI: mlflow ui
+
+# ── Visualisation ────────────────────────────────────────────────────────────
+matplotlib>=3.8.0
+
+# ── Date utilities ───────────────────────────────────────────────────────────
+python-dateutil>=2.9.0
+
+# ── Scheduling ───────────────────────────────────────────────────────────────
+schedule>=1.2.0           # simple cron-like scheduler for daily automation
+
+# ── Notifications ────────────────────────────────────────────────────────────
+requests>=2.31.0          # Telegram Bot API calls
+
+# ── Broker execution (paper trading) ─────────────────────────────────────────
+alpaca-py>=0.20.0         # Alpaca Markets REST + WebSocket API
