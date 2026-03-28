@@ -19,7 +19,7 @@ The engine also performs a live signal scan with multi-ticker support:
   - run_live_scan()        : single ticker, returns signal dict
   - run_multi_ticker_scan(): scans all tickers, respects PositionManager
                              (concurrent positions, correlation blocks, notional caps)
-  - submit_alpaca_order()  : sends the order to Alpaca paper/live account
+  - submit_paper_order()   : forwards the order to the local PaperBroker
 
 Multi-position management
 -------------------------
@@ -51,9 +51,6 @@ from typing import Optional, Union
 import pandas as pd
 
 from config import (
-    ALPACA_KEY,
-    ALPACA_PAPER,
-    ALPACA_SECRET,
     INITIAL_EQUITY,
     MIN_PROBA_THRESHOLD,
     SIGNALS_PATH,
@@ -63,16 +60,9 @@ from config import (
     TICKERS,
 )
 from model_training import ModelTrainer
+from paper_broker import PaperBroker
 from position_manager import PositionManager
 from risk_management import PositionSizer
-
-try:
-    from alpaca.trading.client import TradingClient
-    from alpaca.trading.requests import MarketOrderRequest
-    from alpaca.trading.enums import OrderSide, TimeInForce
-    _ALPACA_OK = True
-except ImportError:
-    _ALPACA_OK = False
 
 logger = logging.getLogger(__name__)
 
@@ -114,32 +104,13 @@ class ExecutionEngine:
 
         self.equity  = equity
         self.sizer   = PositionSizer()
-        self._alpaca = self._init_alpaca()
+        self.broker  = PaperBroker(initial_equity=equity)
 
         # Multi-position state
         self.positions = PositionManager(
             max_positions    = max_positions,
             max_notional_pct = max_notional_pct,
         )
-
-    def _init_alpaca(self) -> Optional[object]:
-        """Initialise Alpaca TradingClient if credentials are available."""
-        if not _ALPACA_OK:
-            return None
-        if not (ALPACA_KEY and ALPACA_SECRET):
-            logger.debug(
-                "Alpaca credentials not set — "
-                "set ALPACA_KEY / ALPACA_SECRET env vars to enable order submission."
-            )
-            return None
-        try:
-            client = TradingClient(ALPACA_KEY, ALPACA_SECRET, paper=ALPACA_PAPER)
-            mode   = "paper" if ALPACA_PAPER else "LIVE"
-            logger.info("Alpaca TradingClient initialised (%s mode).", mode)
-            return client
-        except Exception as exc:
-            logger.warning("Alpaca init failed: %s", exc)
-            return None
 
     # ------------------------------------------------------------------
     def generate_signals(
@@ -306,47 +277,19 @@ class ExecutionEngine:
         return signal
 
     # ------------------------------------------------------------------
-    def submit_alpaca_order(self, signal: dict) -> Optional[object]:
+    def submit_paper_order(self, signal: dict) -> Optional[dict]:
         """
-        Submit a market order to Alpaca (paper or live).
+        Forward a signal to the local PaperBroker for simulated execution.
 
         Parameters
         ----------
         signal : dict produced by run_live_scan() or generate_signals()
 
-        Returns the Alpaca order object, or None if submission was skipped.
+        Returns the broker order record, or None if skipped.
         """
-        if self._alpaca is None:
-            return None
         if not signal:
             return None
-
-        ticker   = signal.get("ticker", "")
-        qty      = signal.get("position_size", 0)
-        side_str = signal.get("direction", "BUY").upper()
-
-        if not ticker or qty <= 0:
-            return None
-
-        side = OrderSide.BUY if side_str == "BUY" else OrderSide.SELL
-
-        try:
-            order = self._alpaca.submit_order(
-                MarketOrderRequest(
-                    symbol=ticker,
-                    qty=qty,
-                    side=side,
-                    time_in_force=TimeInForce.DAY,
-                )
-            )
-            logger.info(
-                "Alpaca order submitted: %s %s x%d  id=%s",
-                side_str, ticker, qty, order.id,
-            )
-            return order
-        except Exception as exc:
-            logger.warning("Alpaca order submission failed: %s", exc)
-            return None
+        return self.broker.submit_order(signal)
 
     # ------------------------------------------------------------------
     def run_multi_ticker_scan(
@@ -454,8 +397,8 @@ class ExecutionEngine:
 
             accepted_signals.append(signal)
 
-            # Submit to Alpaca if connected
-            self.submit_alpaca_order(signal)
+            # Forward to local paper broker
+            self.submit_paper_order(signal)
 
         # Log portfolio state
         if accepted_signals or triggered:
@@ -492,14 +435,17 @@ class ExecutionEngine:
         if record is None:
             return None
 
-        # Submit closing order to Alpaca
+        # Forward closing order to paper broker
         direction = -1 if record["direction"] == "LONG" else 1
         close_signal = {
             "ticker":        ticker,
             "direction":     "SELL" if direction == -1 else "BUY",
+            "entry_price":   exit_price,
             "position_size": record["shares"],
+            "notional_usd":  round(record["shares"] * exit_price, 2),
+            "confidence":    1.0,
         }
-        self.submit_alpaca_order(close_signal)
+        self.submit_paper_order(close_signal)
 
         return record
 

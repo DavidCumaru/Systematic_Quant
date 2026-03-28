@@ -56,6 +56,7 @@ from notifier import Notifier
 from regime_detection import RegimeDetector
 from factor_analysis import FactorAnalyzer
 from portfolio_manager import PortfolioManager
+from ticker_config import load_ticker_params, load_all_params
 
 
 # ---------------------------------------------------------------------------
@@ -143,17 +144,37 @@ def stage_backtest(
     wfv: WalkForwardValidator,
     raw_df: pd.DataFrame,
     ticker: str,
+    params: dict | None = None,
+    regimes: pd.Series | None = None,
 ) -> tuple[pd.DataFrame, pd.Series]:
     """Stage 5 — Realistic backtest on OOS signal stream."""
     logger.info("=" * 60)
     logger.info("STAGE: BACKTEST SIMULATION  [%s]", ticker)
     logger.info("=" * 60)
 
+    if params:
+        logger.info(
+            "Using per-ticker params: conf≥%.2f  sl=%.3f  tp=%.3f  "
+            "bars=%d  dir=%s  regime=%s",
+            params.get("min_proba_threshold", 0),
+            params.get("stop_loss_pct", 0),
+            params.get("take_profit_pct", 0),
+            params.get("time_stop_bars", 0),
+            params.get("direction", "both"),
+            params.get("regime_filter", "all"),
+        )
+
     if wfv.signals_df is None or wfv.signals_df.empty:
         logger.warning("No signals produced by WFV — skipping backtest.")
         return pd.DataFrame(), pd.Series(dtype=float)
 
-    engine       = BacktestEngine(df=raw_df, signals=wfv.signals_df, equity=INITIAL_EQUITY)
+    engine = BacktestEngine(
+        df=raw_df,
+        signals=wfv.signals_df,
+        equity=INITIAL_EQUITY,
+        params=params,
+        regimes=regimes,
+    )
     trades_df    = engine.run()
     equity_curve = engine.equity_curve
 
@@ -298,6 +319,13 @@ def stage_live(trainer: ModelTrainer, ticker: str, equity: float) -> None:
         sig_df = pd.DataFrame([signal])
         sig_df.to_csv(SIGNALS_PATH, index=False)
         logger.info("Signal written -> %s", SIGNALS_PATH)
+        engine.submit_paper_order(signal)
+        engine.broker.fill_pending()
+        state = engine.broker.portfolio_state()
+        logger.info(
+            "Paper broker: equity=$%.2f  open=%d  realised=$%.2f",
+            state["total_equity"], state["n_open"], state["realised_pnl"],
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -319,6 +347,10 @@ def main() -> None:
         help="Use expanding (anchored) WFV window instead of rolling",
     )
     parser.add_argument("--verbose", "-v", action="store_true")
+    parser.add_argument(
+        "--use-ticker-params", action="store_true",
+        help="Load per-ticker params from data/ticker_params.json (set by grid_search.py)",
+    )
     args = parser.parse_args()
 
     _setup_logging(args.verbose)
@@ -342,17 +374,41 @@ def main() -> None:
         vix_df  = load_vix_data()
         spy_raw = load_data("SPY")
 
+        # Load per-ticker params if flag was set
+        if args.use_ticker_params:
+            all_ticker_params = load_all_params()
+            if all_ticker_params:
+                logger.info("Per-ticker params loaded for: %s",
+                            list(all_ticker_params.keys()))
+            else:
+                logger.warning(
+                    "--use-ticker-params set but data/ticker_params.json not found. "
+                    "Run grid_search.py first."
+                )
+        else:
+            all_ticker_params = {}
+
         for ticker in ticker_list:
             logger.info("=" * 60)
             logger.info("TICKER: %s", ticker)
             logger.info("=" * 60)
             try:
-                spy_input = spy_raw if ticker != "SPY" else None
-                labeled   = stage_prepare(ticker, vix_df=vix_df, spy_df=spy_input)
-                wfv       = stage_walk_forward(labeled, ticker=ticker,
-                                               expanding=args.expanding)
-                raw       = load_data(ticker)
-                trades_df, equity_curve = stage_backtest(wfv, raw, ticker)
+                spy_input   = spy_raw if ticker != "SPY" else None
+                labeled     = stage_prepare(ticker, vix_df=vix_df, spy_df=spy_input)
+                wfv         = stage_walk_forward(labeled, ticker=ticker,
+                                                 expanding=args.expanding)
+                raw         = load_data(ticker)
+
+                # Compute regimes (needed by BacktestEngine regime_filter)
+                rd      = RegimeDetector(method="gmm", n_regimes=3)
+                regimes = rd.fit_predict(raw["close"])
+
+                # Per-ticker params (None = use global config defaults)
+                t_params = all_ticker_params.get(ticker) if args.use_ticker_params else None
+
+                trades_df, equity_curve = stage_backtest(
+                    wfv, raw, ticker, params=t_params, regimes=regimes
+                )
                 metrics   = stage_performance(trades_df, equity_curve, ticker)
                 all_metrics[ticker]       = metrics
                 all_equity_curves[ticker] = equity_curve

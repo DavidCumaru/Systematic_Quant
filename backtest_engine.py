@@ -102,6 +102,16 @@ class BacktestEngine:
     signals  : signals DataFrame with columns [pred, proba_1, proba_-1, ...]
                produced by WalkForwardValidator.signals_df or ModelTrainer
     equity   : starting equity in USD
+    params   : optional dict of per-ticker overrides (from ticker_config).
+               Supported keys:
+                 min_proba_threshold, stop_loss_pct, take_profit_pct,
+                 time_stop_bars, use_trend_filter, trend_ma_bars,
+                 direction  ("both" | "long_only" | "short_only"),
+                 regime_filter ("all" | "Bull" | "Bear" | "Sideways" |
+                                "Bull+Sideways" | "Bear+Sideways" | "Bear+Bull")
+    regimes  : optional pd.Series with regime labels aligned to df.index
+               (output of RegimeDetector.fit_predict) — required when
+               params["regime_filter"] != "all"
     """
 
     def __init__(
@@ -110,6 +120,8 @@ class BacktestEngine:
         signals: pd.DataFrame,
         equity: float = INITIAL_EQUITY,
         impact_model: Optional[MarketImpactModel] = None,
+        params: Optional[dict] = None,
+        regimes: Optional[pd.Series] = None,
     ):
         self.df      = df.sort_index()
         self.signals = signals.sort_index()
@@ -118,6 +130,22 @@ class BacktestEngine:
         self.impact  = impact_model or MarketImpactModel(method="sqrt")
         self.trades:  list[Trade]  = []
         self.equity_curve: pd.Series = pd.Series(dtype=float)
+
+        # ── Per-ticker parameter overrides ───────────────────────────────────
+        p = params or {}
+        self._min_proba    = float(p.get("min_proba_threshold", MIN_PROBA_THRESHOLD))
+        self._sl_pct       = float(p.get("stop_loss_pct",       STOP_LOSS_PCT))
+        self._tp_pct       = float(p.get("take_profit_pct",     TAKE_PROFIT_PCT))
+        self._time_stop    = int(p.get("time_stop_bars",        TIME_STOP_BARS))
+        self._use_trend    = bool(p.get("use_trend_filter",     USE_TREND_FILTER))
+        self._trend_bars   = int(p.get("trend_ma_bars",         TREND_MA_BARS))
+        self._direction    = str(p.get("direction",             "both"))
+        self._regime_filt  = str(p.get("regime_filter",        "all"))
+
+        # Regime labels (aligned to df.index) — used when regime_filter != "all"
+        self._regimes: Optional[pd.Series] = None
+        if regimes is not None:
+            self._regimes = regimes.reindex(self.df.index, method="ffill")
 
         # Pre-compute rolling volatility for O(1) regime lookup during the loop
         log_ret = np.log(self.df["close"] / self.df["close"].shift(1))
@@ -132,7 +160,7 @@ class BacktestEngine:
         # Only enter LONG above MA, only enter SHORT below MA.
         self._trend_ma = (
             self.df["close"]
-            .rolling(TREND_MA_BARS, min_periods=TREND_MA_BARS // 2)
+            .rolling(self._trend_bars, min_periods=self._trend_bars // 2)
             .mean()
         )
 
@@ -218,9 +246,23 @@ class BacktestEngine:
             if signal == 0:
                 continue
 
+            # Direction filter
+            if self._direction == "long_only"  and signal == -1:
+                continue
+            if self._direction == "short_only" and signal == 1:
+                continue
+
+            # Regime filter — only trade in allowed regimes
+            if self._regime_filt != "all" and self._regimes is not None:
+                regime_label = self._regimes.get(ts)
+                if regime_label is not None:
+                    allowed = self._regime_filt.split("+")
+                    if regime_label not in allowed:
+                        continue
+
             # Trend filter: only long above MA, only short below MA.
             # Eliminates the primary source of losses: fighting the dominant trend.
-            if USE_TREND_FILTER:
+            if self._use_trend:
                 ma_val = self._trend_ma.iloc[i]
                 price  = bars["close"].iloc[i]
                 if signal == 1  and price < ma_val:   # long in downtrend
@@ -232,7 +274,7 @@ class BacktestEngine:
             proba_col = f"proba_{signal}"
             if proba_col in sig_row.index:
                 proba = float(sig_row[proba_col])
-                if proba < MIN_PROBA_THRESHOLD:
+                if proba < self._min_proba:
                     continue
 
             # Entry bar (delayed)
@@ -243,7 +285,7 @@ class BacktestEngine:
             entry_ts    = idx[entry_bar_idx]
             entry_bar   = bars.iloc[entry_bar_idx]
             # shares not yet sized here; use sizer estimate for impact calc
-            _pre_shares = self.sizer.shares(self.guard.equity, float(entry_bar["open"]), STOP_LOSS_PCT)
+            _pre_shares = self.sizer.shares(self.guard.equity, float(entry_bar["open"]), self._sl_pct)
             entry_price = self._fill_price(
                 float(entry_bar["open"]), signal, shares=_pre_shares, bar_idx=entry_bar_idx
             )
@@ -255,11 +297,11 @@ class BacktestEngine:
                 avg_win  = self._sum_wins  / self._win_count  if self._win_count  > 0 else 0.0
                 avg_loss = self._sum_losses / self._loss_count if self._loss_count > 0 else 1.0
                 shares = self.sizer.kelly_shares(
-                    self.guard.equity, entry_price, STOP_LOSS_PCT,
+                    self.guard.equity, entry_price, self._sl_pct,
                     win_rate, avg_win, avg_loss,
                 )
             else:
-                shares = self.sizer.shares(self.guard.equity, entry_price, STOP_LOSS_PCT)
+                shares = self.sizer.shares(self.guard.equity, entry_price, self._sl_pct)
 
             if shares == 0:
                 continue
@@ -346,8 +388,8 @@ class BacktestEngine:
         Walk forward bar by bar to find the first barrier touched.
         Uses bar high/low to check TP and SL intrabar.
         """
-        tp_price = entry_price * (1 + direction * TAKE_PROFIT_PCT)
-        sl_price = entry_price * (1 - direction * STOP_LOSS_PCT)
+        tp_price = entry_price * (1 + direction * self._tp_pct)
+        sl_price = entry_price * (1 - direction * self._sl_pct)
         n        = len(bars)
         idx      = bars.index
 
@@ -355,7 +397,7 @@ class BacktestEngine:
         exit_reason = "time"
         exit_ts     = None
 
-        for j in range(entry_idx + 1, min(entry_idx + TIME_STOP_BARS + 1, n)):
+        for j in range(entry_idx + 1, min(entry_idx + self._time_stop + 1, n)):
             bar  = bars.iloc[j]
             high = bar["high"]
             low  = bar["low"]
@@ -376,12 +418,12 @@ class BacktestEngine:
                 break
 
         if exit_price is None:
-            last_idx    = min(entry_idx + TIME_STOP_BARS, n - 1)
+            last_idx    = min(entry_idx + self._time_stop, n - 1)
             exit_price  = bars.iloc[last_idx]["close"]
             exit_ts     = idx[last_idx]
             exit_reason = "time"
 
-        exit_bar_i = min(entry_idx + TIME_STOP_BARS, len(bars) - 1)
+        exit_bar_i = min(entry_idx + self._time_stop, len(bars) - 1)
         exit_fill = self._fill_price(exit_price, -direction, shares=shares, bar_idx=exit_bar_i)
         gross_pnl = (exit_fill - entry_price) * shares * direction
         net_pnl   = gross_pnl - 2 * COMMISSION_PER_TRADE

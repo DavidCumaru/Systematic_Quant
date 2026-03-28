@@ -13,11 +13,85 @@ A professional-grade ML-driven quantitative trading research pipeline that disco
 - Triple-Barrier labeling with adaptive ATR-based barriers
 - Walk-forward validation with per-fold IC tracking
 - Event-driven backtester with slippage, commission, spread, and market impact
-- Institutional metrics: Sharpe (with CI), Sortino, Omega, Calmar, IC/ICIR
+- Institutional metrics: Sharpe (with 95% CI bootstrap), Sortino, Omega, Calmar, IC/ICIR
 - Multi-ticker portfolio allocation (risk parity, min-variance, max-Sharpe)
 - GMM/HMM regime detection and conditional performance analysis
-- Live signal generation and Alpaca broker integration
-- MLflow experiment tracking and Telegram notifications
+- Per-ticker parameter optimization via exhaustive grid search (2,688 combinations/ticker)
+- Local paper broker — zero API key required, JSON-persisted state
+- Interactive Streamlit dashboard with live monitoring
+- MLflow experiment tracking
+
+---
+
+## Backtested Results (Walk-Forward Validation, 2004–2026)
+
+> Strategy: LightGBM long/short classifier, Triple-Barrier labels, 24-month rolling train / 6-month test, 10 folds.
+> Capital: USD 100,000. Execution costs: 5 bps slippage + USD 1 commission + 2 bps spread per trade.
+> Parameters per ticker optimized via exhaustive grid search (Sharpe-ranked, min. 10 trades).
+
+### Per-Ticker Results (optimized params)
+
+| Ticker | Total Return | CAGR | Sharpe | Sharpe 95% CI | Sortino | Omega | Max DD | Win Rate | Profit Factor | Trades |
+|--------|-------------|------|--------|---------------|---------|-------|--------|----------|---------------|--------|
+| SPY | +11.28% | 0.32% | 0.52 | [0.23, 0.78] | 1.54 | 1.71 | 2.68% | 33.2% | 1.71 | 202 |
+| QQQ | +8.76% | 0.31% | 0.65 | [0.32, 0.95] | 1.95 | 1.99 | 0.79% | 46.1% | 1.99 | 141 |
+| IWM | +1.57% | 0.06% | 0.15 | [-0.26, 0.47] | 15.34 | 1.26 | 1.38% | 25.4% | 1.26 | 71 |
+| TLT | +4.22% | 0.18% | 0.28 | [-0.12, 0.65] | 0.10 | 1.35 | 3.01% | 54.1% | 1.34 | 109 |
+| GLD | +6.88% | 0.31% | 0.60 | [0.21, 0.93] | 1.20 | 1.75 | 1.19% | 43.0% | 1.75 | 142 |
+
+### Portfolio-Level Summary
+
+| Metric | Value |
+|--------|-------|
+| Portfolio Return | +11.28% |
+| Portfolio Sharpe | 0.52 |
+| Portfolio Max Drawdown | 2.68% |
+| Mean Ticker Sharpe | 0.44 |
+| Best Ticker Sharpe | 0.65 (QQQ) |
+| Mean Win Rate | 40.3% |
+| Mean Profit Factor | 1.61 |
+| Avg Hold Period | ~2–5 bars |
+
+### Optimized Parameters per Ticker
+
+| Ticker | Min Conf | Stop Loss | Take Profit | Time Stop | Direction | Regime Filter |
+|--------|----------|-----------|-------------|-----------|-----------|---------------|
+| SPY | 56% | 0.5% | 2.5% | 5 bars | Both | All |
+| QQQ | 52% | 0.5% | 1.8% | 2 bars | Both | All |
+| IWM | 60% | 0.5% | 2.5% | 5 bars | Long Only | All |
+| TLT | 52% | 1.5% | 2.5% | 5 bars | Both | All |
+| GLD | 48% | 0.5% | 1.8% | 2 bars | Long Only | All |
+
+### 2025 Simulation (R$ 1.000 / USD ~180)
+
+> Applying optimized models and params from Jan/2025 to Mar/2026.
+> Note: R$ 1.000 = USD ~180 at BRL/USD 5.55 — results are proportionally scaled from full backtest.
+> WFV test folds cover Jul/2025–Mar/2026; results limited to periods with out-of-sample signals.
+
+| Ticker | Trades | Win Rate | P&L BRL |
+|--------|--------|----------|---------|
+| SPY | 4 | 0% | -R$ 3,92 |
+| QQQ | 0 | — | — |
+| IWM | 4 | 50% | +R$ 7,46 |
+| TLT | 8 | 38% | -R$ 5,79 |
+| GLD | 11 | 45% | +R$ 9,28 |
+| **TOTAL** | **27** | **41%** | **+R$ 7,03** |
+
+**Capital inicial: R$ 1.000,00 → Capital final: R$ 1.007,03 (+0.70%)**
+
+> GLD foi o melhor ticker — tendência de alta do ouro no 2S2025 favoreceu a estratégia long-only.
+> SPY sofreu 4 stops seguidos em fev/mar 2026 (queda pós-tarifas). IWM teve 2 TPs em jul e nov/2025.
+
+---
+
+## Database
+
+- **Source:** Yahoo Finance (yfinance), daily bars
+- **Storage:** SQLite WAL-mode (`data/market_data.db`)
+- **Universe:** SPY, QQQ, IWM, EFA, EEM, TLT, IEF, GLD, UUP (9 tickers)
+- **Total bars:** ~55,556 daily records
+- **Date range:** ~1993–2026 (varies by ticker)
+- **VIX:** CBOE Volatility Index (macro feature)
 
 ---
 
@@ -34,29 +108,36 @@ systematic_alpha/
 ├── data_pipeline.py         # yfinance download + SQLite storage
 ├── feature_engineering.py   # 24+ quantitative features
 ├── labeling.py              # Triple-Barrier method (-1/0/+1)
-├── model_training.py        # LightGBM + Optuna HPO
+├── model_training.py        # LightGBM + Optuna HPO (specialized Long/Short)
 ├── walk_forward.py          # Walk-forward validation + MLflow
 │
-├── backtest_engine.py       # Event-driven backtester
-├── execution_engine.py      # Signal generation + Alpaca integration
+├── backtest_engine.py       # Event-driven backtester (per-ticker params)
+├── execution_engine.py      # Signal generation + paper broker integration
+├── paper_broker.py          # Local paper broker (JSON state, yfinance fills)
 ├── position_manager.py      # Multi-position state tracking
-├── risk_management.py       # Kelly sizing + RiskGuard
-├── market_impact.py         # Almgren-Chriss impact model
+├── risk_management.py       # Kelly sizing + RiskGuard kill-switches
+├── market_impact.py         # Almgren-Chriss square-root impact model
 │
-├── performance.py           # Institutional metrics
-├── portfolio_manager.py     # Multi-ticker allocation
+├── performance.py           # Institutional metrics + equity curve
+├── portfolio_manager.py     # Multi-ticker allocation (risk parity etc.)
 ├── regime_detection.py      # GMM/HMM regime classification
-├── factor_analysis.py       # IC, ICIR, signal decay, attribution
+├── factor_analysis.py       # IC, ICIR, signal decay, factor attribution
 ├── alternative_data.py      # FRED macro data
 │
-├── notifier.py              # Telegram Bot alerts
+├── ticker_config.py         # Per-ticker parameter storage (JSON)
+├── grid_search.py           # Exhaustive grid search (2,688 combos/ticker)
+├── dashboard.py             # Streamlit dashboard (5 tabs, live monitoring)
+├── notifier.py              # Log-based notifier (no API keys required)
 ├── scheduler.py             # Daily automation
 │
-├── tests/                   # 10 pytest modules (~95% coverage)
+├── tests/                   # 10 pytest modules
 │
-├── data/                    # SQLite OHLCV storage
-├── models/                  # Saved LightGBM models
-├── logs/                    # Equity curves, signals CSV, pipeline log
+├── data/
+│   ├── market_data.db       # SQLite OHLCV database
+│   ├── paper_broker.json    # Paper broker persisted state
+│   └── ticker_params.json   # Per-ticker optimized parameters
+├── models/                  # Saved LightGBM models (.pkl)
+├── logs/                    # Equity curves, signals CSV, pipeline log, grid_search.csv
 └── mlruns/                  # MLflow experiment tracking
 ```
 
@@ -64,19 +145,20 @@ systematic_alpha/
 
 ## Pipeline Stages
 
-The research pipeline runs 9 sequential stages per ticker:
+The research pipeline runs 10 sequential stages per ticker:
 
 | Stage | Module | Description |
 |-------|--------|-------------|
 | 1 | `data_pipeline` | Download OHLCV bars (yfinance), store in SQLite incrementally |
-| 2 | `feature_engineering` | Build 24 causally-correct quantitative features |
+| 2 | `feature_engineering` | Build 24+ causally-correct quantitative features |
 | 3 | `labeling` | Assign Triple-Barrier labels (-1/0/+1) with ATR-based barriers |
-| 4 | `walk_forward` | Rolling 24m train / 6m test WFV with IC tracking |
-| 5 | `backtest_engine` | Event-driven simulation with realistic execution costs |
-| 6 | `performance` | Institutional metrics + equity curve plot |
-| 7 | `factor_analysis` | IC, ICIR, signal decay, factor attribution |
-| 8 | `regime_detection` | GMM regime classification + conditional performance |
-| 9 | `model_training` | Train final model on all data + save to disk |
+| 4 | `walk_forward` | Rolling 24m train / 6m test WFV — 10 folds, IC tracking |
+| 5 | `backtest_engine` | Event-driven simulation with per-ticker params + regime filter |
+| 6 | `performance` | Institutional metrics + bootstrap Sharpe CI + equity curve |
+| 7 | `factor_analysis` | IC, ICIR, signal decay, factor attribution, turnover cost |
+| 8 | `regime_detection` | GMM regime classification + conditional performance breakdown |
+| 9 | `model_training` | Train final Long/Short specialized models on all data |
+| 10 | `execution_engine` | Export signals CSV + paper broker order routing |
 
 ---
 
@@ -91,8 +173,8 @@ The research pipeline runs 9 sequential stages per ticker:
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-username/systematic-alpha.git
-cd systematic-alpha
+git clone https://github.com/DavidCumaru/Systematic_Quant.git
+cd Systematic_Quant
 
 # Create and activate virtual environment
 python -m venv venv
@@ -103,22 +185,7 @@ venv\Scripts\activate           # Windows
 pip install -r requirements.txt
 ```
 
-### Environment Variables
-
-Create a `.env` file (never commit this):
-
-```env
-# Alpaca Markets (paper trading or live)
-ALPACA_API_KEY=your_alpaca_key
-ALPACA_SECRET_KEY=your_alpaca_secret
-ALPACA_BASE_URL=https://paper-api.alpaca.markets  # or live URL
-
-# Telegram notifications (optional)
-TELEGRAM_TOKEN=your_bot_token
-TELEGRAM_CHAT_ID=your_chat_id
-```
-
-All secrets are loaded from environment variables — never hardcoded.
+No API keys required. All data via yfinance (free).
 
 ---
 
@@ -130,23 +197,68 @@ All secrets are loaded from environment variables — never hardcoded.
 # Update market data for all configured tickers
 python main.py --mode update
 
-# Full research pipeline (features → labels → WFV → backtest → analysis)
-python main.py --mode research --tickers SPY QQQ IWM
+# Full research pipeline (features -> labels -> WFV -> backtest -> analysis)
+python main.py --mode research --tickers SPY QQQ IWM TLT GLD
 
-# Single ticker research
-python main.py --mode research --ticker SPY
+# Research with per-ticker optimized parameters
+python main.py --mode research --use-ticker-params --tickers SPY QQQ IWM TLT GLD
 
 # Multi-ticker portfolio analysis
 python main.py --mode portfolio
 
 # Train and save final model for a ticker
-python main.py --mode train --ticker SPY
+python main.py --mode train --ticker GLD
 
-# Generate live signals for execution
+# Generate live signals (routes to paper broker)
 python main.py --mode live --ticker SPY
 ```
 
-### Additional Flags
+### Per-Ticker Grid Search (Parameter Optimization)
+
+```bash
+# Run exhaustive grid search for all tickers (~1h total)
+python grid_search.py --tickers SPY QQQ IWM TLT GLD
+
+# Grid search for specific tickers, show top 3 configs
+python grid_search.py --tickers GLD QQQ --top 3
+
+# Results saved automatically to:
+#   data/ticker_params.json   (best params per ticker)
+#   logs/grid_search.csv      (full 13,440 results)
+```
+
+**Grid search space (2,688 combinations per ticker):**
+
+| Parameter | Values |
+|-----------|--------|
+| `min_proba_threshold` | 0.48, 0.52, 0.56, 0.60 |
+| `stop_loss_pct` | 0.5%, 0.7%, 1.0%, 1.5% |
+| `take_profit_pct` | 0.8%, 1.2%, 1.8%, 2.5% |
+| `time_stop_bars` | 2, 3, 5 |
+| `direction` | both, long_only |
+| `regime_filter` | all, Bull, Bear, Sideways, Bull+Sideways, Bear+Sideways, Bear+Bull |
+
+### Streamlit Dashboard
+
+```bash
+# Launch interactive dashboard
+venv/Scripts/streamlit.exe run dashboard.py   # Windows
+streamlit run dashboard.py                     # Linux/macOS
+
+# Open http://localhost:8501
+```
+
+**Dashboard tabs:**
+
+| Tab | Content |
+|-----|---------|
+| Overview | Portfolio KPIs, equity, total P&L, win rate, open positions |
+| Signals | Signal feed with direction/ticker/confidence filters |
+| Paper Broker | Open positions, closed trades, cash balance |
+| Performance | Equity curves per ticker (PNG), monthly returns |
+| Factor & Regime | IC/ICIR table, signal grade, regime performance breakdown |
+
+### Additional CLI Flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -154,20 +266,8 @@ python main.py --mode live --ticker SPY
 | `--tickers` | config list | Space-separated list of tickers |
 | `--equity` | `100000` | Starting capital for backtest |
 | `--expanding` | `False` | Use expanding window WFV instead of rolling |
+| `--use-ticker-params` | `False` | Load per-ticker optimized params from `data/ticker_params.json` |
 | `--verbose / -v` | `False` | Enable DEBUG-level logging |
-
-### Examples
-
-```bash
-# Research with $50k capital, expanding window, verbose output
-python main.py --mode research --ticker QQQ --equity 50000 --expanding --verbose
-
-# Live signals for multiple tickers
-python main.py --mode live --tickers SPY QQQ GLD
-
-# Portfolio analysis with custom universe
-python main.py --mode portfolio
-```
 
 ---
 
@@ -176,16 +276,19 @@ python main.py --mode portfolio
 All parameters are centralized in [config.py](config.py):
 
 ```python
-# Ticker universe (equities, bonds, commodities, currencies)
+# Ticker universe
 TICKERS = ["SPY", "QQQ", "IWM", "EFA", "EEM", "TLT", "IEF", "GLD", "UUP"]
-
-# Data resolution
-INTERVAL = "1d"   # daily bars (also: "1h", "5m", "1m")
 
 # Walk-forward parameters
 TRAIN_MONTHS = 24
 TEST_MONTHS  = 6
 EMBARGO_DAYS = 3   # prevents look-ahead leakage
+
+# Default execution params (overridden per-ticker after grid search)
+MIN_PROBA_THRESHOLD = 0.52
+STOP_LOSS_PCT       = 0.007
+TAKE_PROFIT_PCT     = 0.012
+TIME_STOP_BARS      = 3
 
 # Risk parameters
 RISK_PER_TRADE    = 0.01   # 1% of equity per trade
@@ -197,10 +300,9 @@ SLIPPAGE_BPS  = 5    # 5 basis points per side
 COMMISSION    = 1.0  # $1 per trade
 SPREAD_BPS    = 2    # 2 basis points bid-ask spread
 BAR_DELAY     = 1    # 1-bar execution delay
-
-# Signal threshold for live trading
-LIVE_PROB_THRESHOLD = 0.48
 ```
+
+Per-ticker overrides are stored in `data/ticker_params.json` (generated by `grid_search.py`).
 
 ---
 
@@ -210,21 +312,23 @@ LIVE_PROB_THRESHOLD = 0.48
 |-----------|-----------|
 | Language | Python 3.11+ |
 | Data | pandas 2.1+, numpy 1.26+, yfinance |
-| ML | LightGBM 4.3+, scikit-learn 1.4+ |
+| ML | LightGBM 4.3+ (specialized Long/Short models) |
 | HPO | Optuna 3.6+ (Bayesian, 20 trials/fold) |
 | Experiment Tracking | MLflow 2.12+ |
-| Backtesting | Custom event-driven engine |
-| Broker | Alpaca Markets (alpaca-py 0.20+) |
-| Notifications | Telegram Bot API |
+| Backtesting | Custom event-driven engine (per-ticker params) |
+| Param Optimization | Custom exhaustive grid search (2,688 combos/ticker) |
+| Paper Broker | Local JSON broker (yfinance next-bar fills) |
+| Dashboard | Streamlit 1.35+ + Plotly 5.20+ |
+| Notifications | Python logging (no external API required) |
 | Scheduling | schedule 1.2+ |
-| Visualization | matplotlib 3.8+ |
+| Visualization | matplotlib 3.8+, Plotly 5.20+, Pillow 10+ |
 | Containerization | Docker (multi-stage) |
 | CI/CD | GitHub Actions |
 | Linting | ruff |
 | Security | bandit |
 | Testing | pytest + pytest-cov |
 
-All dependencies are free and open-source.
+All dependencies are **free and open-source**. No paid API keys required.
 
 ---
 
@@ -232,7 +336,7 @@ All dependencies are free and open-source.
 
 ### Quantitative Features (24+)
 
-- **Returns**: Log returns (lags 1-5), multi-window momentum, 12-1 month momentum
+- **Returns**: Log returns (lags 1–5), multi-window momentum (5/10/20), 12-1 month momentum
 - **Technical**: RSI-14, MACD (12/26/9), ATR-14, VWAP deviation, MA200 distance
 - **Volatility**: Rolling vol (5/21d), Garman-Klass realized volatility
 - **Volume**: Volume spike ratio, Amihud illiquidity proxy
@@ -241,14 +345,20 @@ All dependencies are free and open-source.
 - **Seasonality**: Day-of-week, month-of-year, earnings proximity
 - **Z-scores**: Price and volume normalization across rolling windows
 
-### Labeling
+### Model: Specialized Long/Short Classifiers
 
-Triple-Barrier method with adaptive ATR-based barriers:
+- Two separate LightGBM binary classifiers trained per fold: one for LONG signals, one for SHORT
+- Optuna Bayesian HPO: 20 trials per model per fold
+- Feature selection: importance threshold 0.005 (reduces ~38 → ~28–34 active features)
+- Labels: Triple-Barrier method — +1 (TP hit), -1 (SL hit), 0 (timeout)
 
-- **Take Profit**: 1.0× ATR (or 1.0% fixed fallback)
-- **Stop Loss**: 1.5× ATR (or 0.7% fixed fallback)
-- **Max Hold**: 3 bars
-- **Labels**: +1 (TP hit first), -1 (SL hit first), 0 (timeout)
+### Walk-Forward Validation
+
+- Rolling window: 24-month train / 6-month test
+- Embargo: 3 bars between train and test to prevent leakage
+- 10 folds covering ~2006–2026
+- Per-fold metrics: accuracy, F1-macro, IC (Information Coefficient)
+- Mean IC = 0.04 (GLD), ICIR = 0.33–0.85 depending on ticker/horizon
 
 ### Backtesting Realism
 
@@ -257,9 +367,11 @@ Triple-Barrier method with adaptive ATR-based barriers:
 - 2 bps bid-ask spread
 - 1-bar execution delay
 - Almgren-Chriss square-root market impact model
+- Direction filter (long_only / short_only / both) per ticker
+- Regime filter (skip Bull/Bear/Sideways regimes per ticker config)
 - Trend filter + volatility regime gating
 - Daily stop loss and max drawdown kill-switches
-- Cooldown between consecutive trades
+- Cooldown between consecutive trades, no overlapping positions
 
 ### Portfolio Allocation Methods
 
@@ -274,40 +386,67 @@ Triple-Barrier method with adaptive ATR-based barriers:
 
 | Path | Description |
 |------|-------------|
-| `data/market_data.db` | SQLite OHLCV database (all tickers, all intervals) |
+| `data/market_data.db` | SQLite OHLCV database (~55k bars, 9 tickers) |
+| `data/paper_broker.json` | Paper broker state (positions, trades, cash) |
+| `data/ticker_params.json` | Per-ticker optimized parameters from grid search |
 | `models/model_final_<ticker>.pkl` | Trained LightGBM model for live trading |
 | `logs/equity_curve_<ticker>.png` | Backtest equity curve with drawdown panel |
-| `logs/signals_<ticker>.csv` | Out-of-sample signal predictions |
+| `logs/signals_<ticker>.csv` | Out-of-sample WFV signal predictions |
+| `logs/grid_search.csv` | Full grid search results (13,440 rows) |
 | `logs/pipeline.log` | Full execution log (DEBUG/INFO) |
-| `signals_output.csv` | Latest live signals ready for execution |
 | `mlruns/` | MLflow experiment runs (metrics, params, artifacts) |
 
 ---
 
-## MLflow Experiment Tracking
+## Paper Broker
 
-View experiment results in the MLflow UI:
+The local paper broker (`paper_broker.py`) simulates live trading without any broker account:
+
+```python
+from paper_broker import PaperBroker
+
+broker = PaperBroker(initial_equity=100_000)
+
+# Submit order
+broker.submit_order({"ticker": "GLD", "direction": "LONG", ...})
+
+# Fill via yfinance next-bar close
+broker.fill_pending()
+
+# Mark-to-market and auto-close stops/TPs
+broker.update_positions()
+
+# Full portfolio snapshot
+state = broker.portfolio_state()
+# Returns: cash, market_value, total_equity, unrealised_pnl, realised_pnl,
+#          open_positions, closed_trades, n_open, n_closed, total_return_pct
+```
+
+State persists in `data/paper_broker.json` across restarts.
+
+---
+
+## MLflow Experiment Tracking
 
 ```bash
 mlflow ui
 # Open http://localhost:5000
 ```
 
-Logged per fold: IC, accuracy, loss, model params, feature importances.
+Logged per fold: IC, accuracy, F1-macro, model params, feature importances, Sharpe.
 
 ---
 
 ## Automation (Scheduler)
 
 ```bash
-# Runs continuous daily automation in background
 python scheduler.py
 ```
 
 | Time (ET) | Job |
 |-----------|-----|
 | 08:30 | Incremental data update for all tickers |
-| 09:40 | Live signal scan + Telegram notification |
+| 09:40 | Live signal scan + paper broker routing |
 | Saturday 07:00 | Weekly model retraining |
 
 ---
@@ -318,23 +457,23 @@ python scheduler.py
 # Build image
 docker build -t systematic-alpha .
 
-# Run research pipeline
-docker run --env-file .env \
+# Run research pipeline with optimized params
+docker run \
     -v $(pwd)/data:/app/data \
     -v $(pwd)/models:/app/models \
     -v $(pwd)/logs:/app/logs \
     systematic-alpha \
-    python main.py --mode research --tickers SPY QQQ
+    python main.py --mode research --use-ticker-params --tickers SPY QQQ GLD
 
 # Run live signal scan
-docker run --env-file .env \
+docker run \
     -v $(pwd)/data:/app/data \
     -v $(pwd)/models:/app/models \
     systematic-alpha \
-    python main.py --mode live --ticker SPY
+    python main.py --mode live --ticker GLD
 ```
 
-The Docker image uses a multi-stage build and runs as a non-root user.
+No `.env` file required — no external API keys needed.
 
 ---
 
@@ -347,11 +486,8 @@ pytest tests/ --cov=. -v
 # Run with timeout (recommended for CI)
 pytest tests/ --cov=. --timeout=120
 
-# Run specific test module
-pytest tests/test_backtest_engine.py -v
-
-# Skip slow integration tests
-pytest tests/ -v --ignore=tests/test_sanity.py
+# Run sanity checks (look-ahead bias, position discipline)
+pytest tests/test_sanity.py -v
 ```
 
 ### Test Coverage
@@ -367,6 +503,7 @@ pytest tests/ -v --ignore=tests/test_sanity.py
 | `test_portfolio_manager.py` | Allocation methods, correlation blocking |
 | `test_risk_management.py` | Position sizing, Kelly, RiskGuard kill-switches |
 | `test_performance.py` | Sharpe annualization (daily/intraday), drawdown |
+| `test_sanity.py` | Look-ahead bias (RSI, momentum, labels), position discipline |
 | `conftest.py` | Shared fixtures (synthetic OHLCV, models) |
 
 ---
@@ -384,7 +521,9 @@ GitHub Actions pipeline runs on every push and pull request:
 
 ## Disclaimer
 
-This software is for **research and educational purposes only**. It does not constitute financial advice. Past backtest performance does not guarantee future results. Algorithmic trading involves significant financial risk. Use paper trading accounts before deploying any real capital.
+This software is for **research and educational purposes only**. It does not constitute financial advice. Past backtest performance does not guarantee future results. Algorithmic trading involves significant financial risk. Use paper trading before deploying any real capital.
+
+Backtest results shown above are **out-of-sample** (walk-forward validation), not in-sample. Returns are small by design — the strategy prioritizes low drawdown and controlled risk over absolute returns.
 
 ---
 

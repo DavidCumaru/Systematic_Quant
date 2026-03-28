@@ -209,15 +209,6 @@ MAX_CORRELATION_FILTER = 0.80            # log warning for pairs above this corr
 WFV_EXPANDING = False   # False = rolling window (default) | True = expanding/anchored
 
 # ---------------------------------------------------------------------------
-# Telegram notifications
+# Paper Broker — local simulation (no API key required)
 # ---------------------------------------------------------------------------
-# Set via environment variables — never hardcode secrets
-TELEGRAM_TOKEN   = os.environ.get("TELEGRAM_TOKEN",   "")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
-
-# ---------------------------------------------------------------------------
-# Alpaca Markets — paper / live trading
-# ---------------------------------------------------------------------------
-ALPACA_KEY    = os.environ.get("ALPACA_KEY",    "")
-ALPACA_SECRET = os.environ.get("ALPACA_SECRET", "")
-ALPACA_PAPER  = True          # True = paper trading endpoint (safe default)
+PAPER_BROKER_PATH = DATA_DIR / "paper_broker.json"   # persistent state file
