@@ -1,4 +1,4 @@
-"""
+﻿"""
 tests/test_labeling.py
 ======================
 Unit tests for labeling.py (Triple-Barrier Method).
@@ -22,8 +22,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from labeling import apply_triple_barrier, label_report
-
+from autotrader.labeling.barriers import apply_triple_barrier, label_report
 
 class TestLabelValues:
 
@@ -47,7 +46,7 @@ class TestLookahead:
 
     def test_last_bar_label_requires_forward_window(self, featured_df):
         """Bar at last_ts must NOT appear in labeled output when forward window is absent."""
-        from config import TIME_STOP_BARS
+        from autotrader.config.settings import TIME_STOP_BARS
 
         labeled_full = apply_triple_barrier(featured_df)
         assert not labeled_full.empty
@@ -70,7 +69,7 @@ class TestLookahead:
         mid_ts = featured_df.index[mid]
 
         labeled_from_mid = apply_triple_barrier(featured_df.iloc[:mid + 20])
-        labeled_full     = apply_triple_barrier(featured_df)
+        labeled_full = apply_triple_barrier(featured_df)
 
         if mid_ts in labeled_from_mid.index and mid_ts in labeled_full.index:
             assert labeled_from_mid.loc[mid_ts, "label"] == labeled_full.loc[mid_ts, "label"]

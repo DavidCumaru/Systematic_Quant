@@ -1,4 +1,4 @@
-"""
+﻿"""
 tests/test_execution_engine.py
 ================================
 Unit tests for execution_engine.py.
@@ -23,8 +23,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from execution_engine import ExecutionEngine
-from model_training import ModelTrainer
+from autotrader.execution.engine import ExecutionEngine
+from autotrader.models.trainer import ModelTrainer
 
 
 REQUIRED_SIGNAL_FIELDS = {
@@ -46,15 +46,12 @@ def engine(trained_trainer):
     return ExecutionEngine(trainer=trained_trainer, equity=100_000)
 
 
-# ---------------------------------------------------------------------------
 # Tests: generate_signals
-# ---------------------------------------------------------------------------
-
 class TestGenerateSignals:
 
     def test_returns_dataframe(self, engine, labeled_df, featured_df):
-        proba_df  = engine.trainer.predict_proba(labeled_df)
-        preds     = engine.trainer.predict(labeled_df)
+        proba_df = engine.trainer.predict_proba(labeled_df)
+        preds = engine.trainer.predict(labeled_df)
         signals_df = pd.DataFrame({"pred": preds}, index=labeled_df.index)
         signals_df = pd.concat([signals_df, proba_df.add_prefix("proba_")], axis=1)
 
@@ -68,8 +65,8 @@ class TestGenerateSignals:
         assert result.empty
 
     def test_required_fields_present(self, engine, labeled_df, featured_df):
-        proba_df  = engine.trainer.predict_proba(labeled_df)
-        preds     = engine.trainer.predict(labeled_df)
+        proba_df = engine.trainer.predict_proba(labeled_df)
+        preds = engine.trainer.predict(labeled_df)
         signals_df = pd.DataFrame({"pred": preds}, index=labeled_df.index)
         signals_df = pd.concat([signals_df, proba_df.add_prefix("proba_")], axis=1)
 
@@ -80,8 +77,8 @@ class TestGenerateSignals:
         assert REQUIRED_SIGNAL_FIELDS.issubset(set(result.columns))
 
     def test_direction_values(self, engine, labeled_df, featured_df):
-        proba_df  = engine.trainer.predict_proba(labeled_df)
-        preds     = engine.trainer.predict(labeled_df)
+        proba_df = engine.trainer.predict_proba(labeled_df)
+        preds = engine.trainer.predict(labeled_df)
         signals_df = pd.DataFrame({"pred": preds}, index=labeled_df.index)
         signals_df = pd.concat([signals_df, proba_df.add_prefix("proba_")], axis=1)
 
@@ -92,8 +89,8 @@ class TestGenerateSignals:
         assert set(result["direction"].unique()).issubset({"BUY", "SELL"})
 
     def test_confidence_in_range(self, engine, labeled_df, featured_df):
-        proba_df  = engine.trainer.predict_proba(labeled_df)
-        preds     = engine.trainer.predict(labeled_df)
+        proba_df = engine.trainer.predict_proba(labeled_df)
+        preds = engine.trainer.predict(labeled_df)
         signals_df = pd.DataFrame({"pred": preds}, index=labeled_df.index)
         signals_df = pd.concat([signals_df, proba_df.add_prefix("proba_")], axis=1)
 
@@ -105,8 +102,8 @@ class TestGenerateSignals:
         assert (result["confidence"] <= 1).all()
 
     def test_notional_positive(self, engine, labeled_df, featured_df):
-        proba_df  = engine.trainer.predict_proba(labeled_df)
-        preds     = engine.trainer.predict(labeled_df)
+        proba_df = engine.trainer.predict_proba(labeled_df)
+        preds = engine.trainer.predict(labeled_df)
         signals_df = pd.DataFrame({"pred": preds}, index=labeled_df.index)
         signals_df = pd.concat([signals_df, proba_df.add_prefix("proba_")], axis=1)
 
@@ -117,10 +114,7 @@ class TestGenerateSignals:
         assert (result["notional_usd"] > 0).all()
 
 
-# ---------------------------------------------------------------------------
 # Tests: run_live_scan
-# ---------------------------------------------------------------------------
-
 class TestRunLiveScan:
 
     def test_returns_none_for_empty_df(self, engine):
@@ -154,10 +148,7 @@ class TestRunLiveScan:
         assert result["take_profit"] > result["entry_price"]
 
 
-# ---------------------------------------------------------------------------
 # Tests: print_signal
-# ---------------------------------------------------------------------------
-
 class TestPrintSignal:
 
     def test_does_not_raise_for_none(self, engine, capsys):

@@ -1,0 +1,114 @@
+name: Scan Diario B3
+
+on:
+  schedule:
+    - cron: '10 13 * * 1-5'   # 10:10 BRT = 13:10 UTC, segunda a sexta
+  workflow_dispatch: # permite rodar manualmente
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  BROKER_MODE: paper
+  TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+  TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+  INITIAL_EQUITY: "8000"
+
+permissions:
+  contents: write   # necessario para commitar journal.csv
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout do repositorio
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          persist-credentials: true
+
+      - name: Configura Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Instala dependencias
+        run: |
+          pip install -q --upgrade pip
+          # Exclui pacotes incompatíveis com Linux ou desnecessários para o scan:
+          # MetaTrader5 = Windows-only; mlflow-skinny/tracing conflitam com mlflow;
+          # streamlit = UI, desnecessario no CI
+          grep -v -i "MetaTrader5\|mlflow\|streamlit" requirements.txt > req_linux.txt
+          pip install -q -r req_linux.txt
+          pip install -q pytrends   # Google Trends para features
+
+      - name: Valida imports criticos
+        run: |
+          python -c "
+          import autotrader
+          import yfinance
+          import lightgbm
+          import pandas as pd
+          import numpy as np
+          print(f'OK: pandas={pd.__version__}  lightgbm instalado')
+          "
+
+      - name: Restore banco de dados (cache)
+        uses: actions/cache@v4
+        with:
+          path: data/market_data.db
+          key: market-db-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            market-db-${{ runner.os }}-
+
+      - name: Restore journal de trades (cache)
+        uses: actions/cache@v4
+        with:
+          path: trades/journal.csv
+          key: journal-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            journal-${{ runner.os }}-
+
+      - name: Cria diretorios necessarios
+        run: |
+          mkdir -p trades data models logs
+
+      - name: Executa scan de sinais
+        run: python scheduler.py --agora
+
+      - name: Envia resumo semanal (sexta-feira)
+        run: |
+          python -c "
+          import os
+          from datetime import date
+          if date.today().weekday() == 4:
+              from autotrader.utils.journal import journal_send_weekly_summary
+              from autotrader.utils.notifier import Notifier
+              equity = float(os.environ.get('INITIAL_EQUITY', 8000))
+              journal_send_weekly_summary(capital=equity, notifier=Notifier())
+          "
+
+      - name: Salva journal no repositorio
+        run: |
+          git config user.name  "Systematic Alpha Bot"
+          git config user.email "bot@noreply.github.com"
+          git add trades/ || true
+          git diff --staged --quiet || (
+            git commit -m "data: journal atualizado $(date +%Y-%m-%d)" &&
+            git push
+          )
+
+      - name: Salva banco de dados atualizado
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: data/market_data.db
+          key: market-db-${{ runner.os }}-${{ github.run_id }}
+
+      - name: Salva journal atualizado
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: trades/journal.csv
+          key: journal-${{ runner.os }}-${{ github.run_id }}

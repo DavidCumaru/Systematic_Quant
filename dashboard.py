@@ -26,8 +26,12 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 from PIL import Image
+from paper_broker import PaperBroker
 
-# ── project paths ────────────────────────────────────────────────────────────
+import sys
+
+
+# project paths
 BASE   = Path(__file__).resolve().parent
 LOGS   = BASE / "logs"
 DATA   = BASE / "data"
@@ -40,8 +44,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ── helpers ──────────────────────────────────────────────────────────────────
-
+# helpers
 @st.cache_data(ttl=60)
 def load_signals(ticker: str | None = None) -> pd.DataFrame:
     """Load signal CSVs from logs/. Optionally filter by ticker."""
@@ -99,7 +102,6 @@ def load_equity_curves() -> dict[str, pd.Series]:
             pass
     return curves
 
-
 def _fmt(val: float | None, decimals: int = 2, suffix: str = "") -> str:
     if val is None:
         return "—"
@@ -111,8 +113,7 @@ def _color_metric(val: float, positive_good: bool = True) -> str:
         return "normal" if positive_good else "inverse"
     return "inverse" if positive_good else "normal"
 
-
-# ── sidebar ──────────────────────────────────────────────────────────────────
+# sidebar 
 with st.sidebar:
     st.title("📈 Systematic Alpha")
     st.caption("Research · Paper Trading · Analytics")
@@ -140,7 +141,7 @@ with st.sidebar:
     st.divider()
     st.caption("Broker local — sem API key\nyfinance fill simulation")
 
-# ── tabs ─────────────────────────────────────────────────────────────────────
+# tabs
 tab_overview, tab_signals, tab_broker, tab_performance, tab_factor = st.tabs([
     "📊 Overview",
     "🔔 Signals",
@@ -149,20 +150,17 @@ tab_overview, tab_signals, tab_broker, tab_performance, tab_factor = st.tabs([
     "🔬 Factor & Regime",
 ])
 
-
-# ══════════════════════════════════════════════════════════════════════════════
 # TAB 1 — OVERVIEW
-# ══════════════════════════════════════════════════════════════════════════════
 with tab_overview:
     st.header("Portfolio Overview")
 
     broker = load_broker_state()
 
     if broker:
-        init_eq  = broker.get("initial_equity", 100_000)
-        cash     = broker.get("cash", init_eq)
+        init_eq = broker.get("initial_equity", 100_000)
+        cash = broker.get("cash", init_eq)
         open_pos = broker.get("open_positions", {})
-        closed   = broker.get("closed_trades", [])
+        closed = broker.get("closed_trades", [])
 
         market_val = sum(
             p.get("current_price", p["entry_price"]) * p["qty"]
@@ -170,16 +168,16 @@ with tab_overview:
             if p.get("direction") == "BUY"
         )
         total_eq = cash + market_val
-        ret_pct  = (total_eq / init_eq - 1) * 100
+        ret_pct = (total_eq / init_eq - 1) * 100
         realised = sum(t["gross_pnl"] for t in closed)
         unrealised = sum(p.get("unrealised_pnl", 0) for p in open_pos.values())
 
         c1, c2, c3, c4, c5 = st.columns(5)
-        c1.metric("Equity Total",   f"${total_eq:,.2f}",
+        c1.metric("Equity Total", f"${total_eq:,.2f}",
                   f"{ret_pct:+.2f}%")
-        c2.metric("Cash",           f"${cash:,.2f}")
-        c3.metric("Valor em Mercado",f"${market_val:,.2f}")
-        c4.metric("P&L Realizado",  f"${realised:+,.2f}",
+        c2.metric("Cash", f"${cash:,.2f}")
+        c3.metric("Valor em Mercado", f"${market_val:,.2f}")
+        c4.metric("P&L Realizado", f"${realised:+,.2f}",
                   delta_color="normal" if realised >= 0 else "inverse")
         c5.metric("P&L Não Realizado", f"${unrealised:+,.2f}",
                   delta_color="normal" if unrealised >= 0 else "inverse")
@@ -192,13 +190,13 @@ with tab_overview:
             wins = (df_c["gross_pnl"] > 0).sum()
             total_t = len(df_c)
             win_rate = wins / total_t * 100
-            gross_p  = df_c[df_c["gross_pnl"] > 0]["gross_pnl"].sum()
-            gross_l  = df_c[df_c["gross_pnl"] < 0]["gross_pnl"].sum().abs()
+            gross_p = df_c[df_c["gross_pnl"] > 0]["gross_pnl"].sum()
+            gross_l = df_c[df_c["gross_pnl"] < 0]["gross_pnl"].sum().abs()
             pf = gross_p / gross_l if gross_l > 0 else float("inf")
 
             cc1, cc2, cc3, cc4 = st.columns(4)
             cc1.metric("Trades Fechados", total_t)
-            cc2.metric("Win Rate",  f"{win_rate:.1f}%")
+            cc2.metric("Win Rate", f"{win_rate:.1f}%")
             cc3.metric("Profit Factor", f"{pf:.2f}")
             cc4.metric("Posições Abertas", len(open_pos))
     else:
@@ -207,7 +205,7 @@ with tab_overview:
             "Rode `python main.py --mode live` para gerar sinais e preencher posições."
         )
 
-    # ── Backtest aggregate table (from pipeline logs)
+    # Backtest aggregate table (from pipeline logs)
     st.subheader("Backtest Aggregate — Últimos Resultados")
     frames = []
     for p in LOGS.glob("signals_*.csv"):
@@ -230,9 +228,7 @@ with tab_overview:
         st.dataframe(pd.DataFrame(frames).set_index("Ticker"), use_container_width=True)
 
 
-# ══════════════════════════════════════════════════════════════════════════════
 # TAB 2 — SIGNALS
-# ══════════════════════════════════════════════════════════════════════════════
 with tab_signals:
     st.header("Feed de Sinais")
 
@@ -287,9 +283,7 @@ with tab_signals:
             st.plotly_chart(fig2, use_container_width=True)
 
 
-# ══════════════════════════════════════════════════════════════════════════════
 # TAB 3 — PAPER BROKER
-# ══════════════════════════════════════════════════════════════════════════════
 with tab_broker:
     st.header("Paper Broker — Simulação Local")
     st.caption("Fills simulados com preços reais via yfinance.  Sem API key.")
@@ -298,7 +292,7 @@ with tab_broker:
     if not broker:
         st.info("Estado do broker vazio. Execute `python main.py --mode live` para criar ordens.")
     else:
-        # ── Open positions
+        # Open positions
         st.subheader("Posições Abertas")
         open_pos = broker.get("open_positions", {})
         if open_pos:
@@ -306,19 +300,19 @@ with tab_broker:
             for ticker, p in open_pos.items():
                 curr = p.get("current_price", p["entry_price"])
                 entry = p["entry_price"]
-                qty   = p["qty"]
+                qty = p["qty"]
                 direction = p["direction"]
-                upnl  = p.get("unrealised_pnl", round((curr - entry) * qty * (1 if direction == "BUY" else -1), 2))
+                upnl = p.get("unrealised_pnl", round((curr - entry) * qty * (1 if direction == "BUY" else -1), 2))
                 rows.append({
-                    "Ticker":     ticker,
-                    "Direção":    direction,
-                    "Qtd":        qty,
-                    "Entrada":    f"${entry:.2f}",
-                    "Atual":      f"${curr:.2f}",
-                    "Stop":       f"${p['stop_loss']:.2f}" if p.get("stop_loss") else "—",
-                    "Target":     f"${p['take_profit']:.2f}" if p.get("take_profit") else "—",
-                    "P&L Não Real.": f"${upnl:+,.2f}",
-                    "Confiança":  f"{p.get('confidence', 0):.1%}",
+                    "Ticker": ticker,
+                    "Direção": direction,
+                    "Qtd": qty,
+                    "Entrada":f"${entry:.2f}",
+                    "Atual":f"${curr:.2f}",
+                    "Stop":f"${p['stop_loss']:.2f}" if p.get("stop_loss") else "—",
+                    "Target":f"${p['take_profit']:.2f}" if p.get("take_profit") else "—",
+                    "P&L Não Real.":f"${upnl:+,.2f}",
+                    "Confiança":f"{p.get('confidence', 0):.1%}",
                 })
             st.dataframe(pd.DataFrame(rows), use_container_width=True)
         else:
@@ -326,7 +320,7 @@ with tab_broker:
 
         st.divider()
 
-        # ── Closed trades
+        # Closed trades
         st.subheader("Trades Fechados")
         closed = broker.get("closed_trades", [])
         if closed:
@@ -336,7 +330,7 @@ with tab_broker:
             )
 
             # Summary KPIs
-            wins    = (df_c["gross_pnl"] > 0).sum()
+            wins = (df_c["gross_pnl"] > 0).sum()
             total_t = len(df_c)
             gross_p = df_c[df_c["gross_pnl"] > 0]["gross_pnl"].sum()
             gross_l = df_c[df_c["gross_pnl"] < 0]["gross_pnl"].sum().abs()
@@ -384,21 +378,19 @@ with tab_broker:
         else:
             st.info("Nenhum trade fechado ainda.")
 
-        # ── Pending orders
+        # Pending orders
         pending = broker.get("pending", [])
         if pending:
             st.divider()
             st.subheader(f"Ordens Pendentes ({len(pending)})")
             st.dataframe(pd.DataFrame(pending), use_container_width=True)
 
-        # ── Reset button
+        # Reset button
         st.divider()
         with st.expander("Configurações do Broker", expanded=False):
             st.warning("Reset apaga todos os trades e posições do paper broker.")
             if st.button("Reset Paper Broker", type="secondary"):
-                import sys
                 sys.path.insert(0, str(BASE))
-                from paper_broker import PaperBroker
                 init_eq = broker.get("initial_equity", 100_000)
                 PaperBroker(initial_equity=init_eq).reset(init_eq)
                 st.success("Broker resetado.")
@@ -406,18 +398,16 @@ with tab_broker:
                 st.rerun()
 
 
-# ══════════════════════════════════════════════════════════════════════════════
 # TAB 4 — PERFORMANCE
-# ══════════════════════════════════════════════════════════════════════════════
 with tab_performance:
     st.header("Performance por Ticker — Backtest")
 
-    # ── Equity curve images
+    # Equity curve images
     img_files = sorted(LOGS.glob("equity_curve_*.png"))
     if img_files:
         tickers_img = [p.stem.replace("equity_curve_", "") for p in img_files]
         if selected_tickers:
-            img_files   = [p for p, t in zip(img_files, tickers_img) if t in selected_tickers]
+            img_files = [p for p, t in zip(img_files, tickers_img) if t in selected_tickers]
             tickers_img = [t for t in tickers_img if t in selected_tickers]
 
         if img_files:
@@ -435,7 +425,7 @@ with tab_performance:
 
     st.divider()
 
-    # ── Per-ticker signal stats (proxy for backtest summary)
+    # Per-ticker signal stats (proxy for backtest summary)
     st.subheader("Estatísticas de Sinais por Ticker")
 
     rows = []
@@ -448,17 +438,17 @@ with tab_performance:
             if df.empty:
                 continue
             n_total = len(df)
-            n_buy   = (df["direction"] == "BUY").sum() if "direction" in df.columns else "—"
-            n_sell  = (df["direction"] == "SELL").sum() if "direction" in df.columns else "—"
-            avg_c   = df["confidence"].mean() if "confidence" in df.columns else None
+            n_buy = (df["direction"] == "BUY").sum() if "direction" in df.columns else "—"
+            n_sell = (df["direction"] == "SELL").sum() if "direction" in df.columns else "—"
+            avg_c = df["confidence"].mean() if "confidence" in df.columns else None
             avg_not = df["notional_usd"].mean() if "notional_usd" in df.columns else None
             rows.append({
-                "Ticker":          ticker,
-                "Total Sinais":    n_total,
-                "BUY":             n_buy,
-                "SELL":            n_sell,
-                "Conf. Média":     f"{avg_c:.2%}" if avg_c else "—",
-                "Notional Médio":  f"${avg_not:,.0f}" if avg_not else "—",
+                "Ticker": ticker,
+                "Total Sinais": n_total,
+                "BUY": n_buy,
+                "SELL": n_sell,
+                "Conf. Média": f"{avg_c:.2%}" if avg_c else "—",
+                "Notional Médio": f"${avg_not:,.0f}" if avg_not else "—",
             })
         except Exception:
             pass
@@ -466,7 +456,7 @@ with tab_performance:
     if rows:
         st.dataframe(pd.DataFrame(rows).set_index("Ticker"), use_container_width=True)
 
-    # ── Notional distribution
+    # Notional distribution
     all_sigs = load_signals()
     if not all_sigs.empty and "notional_usd" in all_sigs.columns:
         st.subheader("Distribuição de Notional por Ticker")
@@ -476,7 +466,7 @@ with tab_performance:
                      color="ticker", title="Notional USD", height=350)
         st.plotly_chart(fig, use_container_width=True)
 
-    # ── Confidence histogram
+    # Confidence histogram
     if not all_sigs.empty and "confidence" in all_sigs.columns:
         st.subheader("Histograma de Confiança")
         fig2 = px.histogram(all_sigs, x="confidence", color="ticker",
@@ -484,14 +474,11 @@ with tab_performance:
                             title="Distribuição de Confiança do Modelo", height=320)
         st.plotly_chart(fig2, use_container_width=True)
 
-
-# ══════════════════════════════════════════════════════════════════════════════
 # TAB 5 — FACTOR & REGIME
-# ══════════════════════════════════════════════════════════════════════════════
 with tab_factor:
     st.header("Factor Analysis & Regime")
 
-    # ── Parse pipeline.log for IC/ICIR and regime data
+    # Parse pipeline.log for IC/ICIR and regime data
     log_path = LOGS / "pipeline.log"
 
     if not log_path.exists():
@@ -504,7 +491,7 @@ with tab_factor:
         except Exception:
             log_lines = []
 
-        # ── IC Summary
+        # IC Summary
         ic_rows = []
         for line in log_lines:
             if "IC Mean" in line or "ICIR" in line or "IC mean" in line:
@@ -524,7 +511,7 @@ with tab_factor:
             else:
                 st.code("\n".join(ic_rows[:20]))
 
-        # ── Regime table
+        # Regime table
         st.subheader("Performance por Regime")
         regime_sections = []
         in_regime = False
@@ -549,7 +536,7 @@ with tab_factor:
         else:
             st.info("Nenhum dado de regime encontrado no log.")
 
-        # ── Signal decay visualization (if logged)
+        # Signal decay visualization (if logged)
         decay_data = {}
         for line in log_lines:
             if "IC_" in line and "horizon" in line.lower():
@@ -577,12 +564,12 @@ with tab_factor:
                           annotation_text="IC=0.10 (institutional)")
             st.plotly_chart(fig, use_container_width=True)
 
-        # ── Last N log lines (diagnostics)
+        # Last N log lines (diagnostics)
         with st.expander("Últimas 100 linhas do pipeline.log", expanded=False):
             st.code("".join(log_lines[-100:]))
 
 
-# ── footer ───────────────────────────────────────────────────────────────────
+# footer
 st.divider()
 st.caption(
     "Systematic Alpha Research Pipeline · Paper Broker Local · yfinance Data · "

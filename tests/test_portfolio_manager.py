@@ -1,4 +1,4 @@
-"""
+﻿"""
 tests/test_portfolio_manager.py
 ================================
 Unit tests for portfolio_manager.py.
@@ -26,16 +26,14 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from portfolio_manager import PortfolioManager
+from autotrader.risk.portfolio import PortfolioManager
 
 
 TICKERS = ["SPY", "QQQ", "TLT", "GLD"]
 
-
 @pytest.fixture
 def returns(returns_df):
     return returns_df
-
 
 class TestEqualWeights:
 
@@ -51,7 +49,6 @@ class TestEqualWeights:
         w = pm.compute_weights(TICKERS, returns, active)
         vals = list(w.values())
         assert max(vals) - min(vals) < 1e-9
-
 
 class TestRiskParity:
 
@@ -107,7 +104,6 @@ class TestMaxSharpe:
 
 
 class TestPositionCap:
-
     def test_max_position_cap_respected(self, returns):
         cap = 0.30
         pm = PortfolioManager(method="risk_parity", max_position_pct=cap)
@@ -115,7 +111,6 @@ class TestPositionCap:
         w = pm.compute_weights(TICKERS, returns, active)
         for t, v in w.items():
             assert v <= cap + 1e-9, f"Position for {t} exceeds cap: {v:.4f} > {cap}"
-
 
 class TestAllocateShares:
 

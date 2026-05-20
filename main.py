@@ -16,11 +16,11 @@ Modes
 Run examples
 ------------
   python main.py --mode update
-  python main.py --mode research --tickers SPY QQQ
+  python main.py --mode research --tickers BOVA11.SA PETR4.SA
   python main.py --mode portfolio
-  python main.py --mode live --ticker SPY
-  python main.py --mode train --ticker SPY
-  python main.py --mode research --tickers SPY QQQ --expanding
+  python main.py --mode live --ticker BOVA11.SA
+  python main.py --mode train --ticker BOVA11.SA
+  python main.py --mode research --tickers BOVA11.SA VALE3.SA --expanding
 """
 
 import argparse
@@ -30,41 +30,39 @@ from pathlib import Path
 
 import pandas as pd
 
-# ── project modules ──────────────────────────────────────────────────────────
-from config import (
+# project modules
+from autotrader.config.settings import (
+    BENCHMARK_TICKER,
     INITIAL_EQUITY,
     LOGS_DIR,
     MODELS_DIR,
     SIGNALS_PATH,
     TICKERS,
 )
-from data_pipeline import load_data, load_vix_data, update_data
-from feature_engineering import build_features, get_feature_names
-from labeling import apply_triple_barrier, label_report
-from model_training import ModelTrainer, temporal_split
-from walk_forward import WalkForwardValidator
-from backtest_engine import BacktestEngine
-from execution_engine import ExecutionEngine
-from performance import (
+from autotrader.data.pipeline import load_data, load_vix_data, update_data
+from autotrader.features.engineering import build_features, get_feature_names
+from autotrader.labeling.barriers import apply_triple_barrier, label_report
+from autotrader.models.trainer import ModelTrainer, temporal_split
+from autotrader.models.walk_forward import WalkForwardValidator
+from autotrader.backtesting.engine import BacktestEngine
+from autotrader.execution.engine import ExecutionEngine
+from autotrader.analysis.performance import (
     compute_metrics,
     monthly_returns_table,
     plot_equity_curve,
     print_metrics,
     sharpe_confidence_interval,
 )
-from notifier import Notifier
-from regime_detection import RegimeDetector
-from factor_analysis import FactorAnalyzer
-from portfolio_manager import PortfolioManager
-from ticker_config import load_ticker_params, load_all_params
+from autotrader.utils.notifier import Notifier
+from autotrader.models.regime import RegimeDetector
+from autotrader.analysis.factors import FactorAnalyzer
+from autotrader.risk.portfolio import PortfolioManager
+from autotrader.config.ticker_config import load_ticker_params, load_all_params
 
 
-# ---------------------------------------------------------------------------
 # Logging setup
-# ---------------------------------------------------------------------------
-
 def _setup_logging(verbose: bool = False) -> None:
-    level    = logging.DEBUG if verbose else logging.INFO
+    level = logging.DEBUG if verbose else logging.INFO
     log_file = LOGS_DIR / "pipeline.log"
     stream_handler = logging.StreamHandler(
         open(sys.stdout.fileno(), mode="w", encoding="utf-8", closefd=False)
@@ -84,10 +82,7 @@ def _setup_logging(verbose: bool = False) -> None:
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
 # Pipeline stages
-# ---------------------------------------------------------------------------
-
 def stage_update(tickers: list[str]) -> None:
     """Stage 1 — Download and persist market data."""
     logger.info("=" * 60)
@@ -115,7 +110,7 @@ def stage_prepare(
 
     featured = build_features(
         raw,
-        spy_df=spy_df if ticker != "SPY" else None,
+        spy_df=spy_df if ticker != BENCHMARK_TICKER else None,
         vix_df=vix_df,
         ticker=ticker,
     )
@@ -175,7 +170,7 @@ def stage_backtest(
         params=params,
         regimes=regimes,
     )
-    trades_df    = engine.run()
+    trades_df = engine.run()
     equity_curve = engine.equity_curve
 
     logger.info("Trades: %d", len(trades_df))
@@ -239,10 +234,10 @@ def stage_factor_analysis(
         logger.warning("No signals — skipping factor analysis.")
         return
 
-    fa     = FactorAnalyzer()
+    fa = FactorAnalyzer()
     prices = raw_df["close"]
 
-    ic_df    = fa.ic_summary(wfv.signals_df, prices)
+    ic_df = fa.ic_summary(wfv.signals_df, prices)
     decay_df = fa.signal_decay(wfv.signals_df, prices, max_horizon=10)
     turnover = fa.turnover_analysis(wfv.signals_df, trades_df)
 
@@ -267,10 +262,10 @@ def stage_regime_analysis(
         logger.warning("No trades — skipping regime analysis.")
         return
 
-    rd      = RegimeDetector(method="gmm", n_regimes=3)
+    rd = RegimeDetector(method="gmm", n_regimes=3)
     regimes = rd.fit_predict(raw_df["close"])
 
-    stats     = rd.regime_stats(regimes)
+    stats = rd.regime_stats(regimes)
     logger.info("Regime distribution:\n%s", stats.to_string())
 
     breakdown = rd.performance_by_regime(trades_df, regimes)
@@ -306,13 +301,13 @@ def stage_live(trainer: ModelTrainer, ticker: str, equity: float) -> None:
         logger.error("No data available for live scan.")
         return
 
-    vix_df   = load_vix_data()
-    spy_raw  = load_data("SPY") if ticker != "SPY" else None
+    vix_df = load_vix_data()
+    spy_raw  = load_data(BENCHMARK_TICKER) if ticker != BENCHMARK_TICKER else None
     featured = build_features(raw, spy_df=spy_raw, vix_df=vix_df, ticker=ticker)
 
     latest_df = featured.tail(100)
-    engine    = ExecutionEngine(trainer=trainer, equity=equity)
-    signal    = engine.run_live_scan(latest_df, ticker=ticker)
+    engine = ExecutionEngine(trainer=trainer, equity=equity)
+    signal = engine.run_live_scan(latest_df, ticker=ticker)
     engine.print_signal(signal)
 
     if signal:
@@ -328,10 +323,7 @@ def stage_live(trainer: ModelTrainer, ticker: str, equity: float) -> None:
         )
 
 
-# ---------------------------------------------------------------------------
 # Main entry point
-# ---------------------------------------------------------------------------
-
 def main() -> None:
     parser = argparse.ArgumentParser(description="Systematic Alpha Research Pipeline")
     parser.add_argument(
@@ -339,9 +331,9 @@ def main() -> None:
         choices=["update", "research", "portfolio", "live", "train"],
         default="research",
     )
-    parser.add_argument("--ticker",  type=str, default=TICKERS[0])
+    parser.add_argument("--ticker", type=str, default=None)
     parser.add_argument("--tickers", type=str, nargs="+", default=None)
-    parser.add_argument("--equity",  type=float, default=INITIAL_EQUITY)
+    parser.add_argument("--equity", type=float, default=INITIAL_EQUITY)
     parser.add_argument(
         "--expanding", action="store_true",
         help="Use expanding (anchored) WFV window instead of rolling",
@@ -355,24 +347,29 @@ def main() -> None:
 
     _setup_logging(args.verbose)
 
-    ticker_list = args.tickers if args.tickers else [args.ticker]
+    if args.tickers:
+        ticker_list = args.tickers
+    elif args.ticker:
+        ticker_list = [args.ticker]
+    else:
+        ticker_list = TICKERS  # default: todos do config
     logger.info("Pipeline — mode=%s  tickers=%s", args.mode, ticker_list)
 
-    # ── UPDATE ──────────────────────────────────────────────────────────────
+    # UPDATE
     if args.mode == "update":
-        stage_update(TICKERS)
+        stage_update(ticker_list)
 
-    # ── RESEARCH ────────────────────────────────────────────────────────────
+    # RESEARCH
     elif args.mode == "research":
         stage_update(ticker_list)
 
-        all_metrics:       dict[str, dict]      = {}
+        all_metrics: dict[str, dict]      = {}
         all_equity_curves: dict[str, pd.Series] = {}
         notif = Notifier()
 
-        logger.info("Loading VIX and SPY reference data...")
-        vix_df  = load_vix_data()
-        spy_raw = load_data("SPY")
+        logger.info("Carregando VIX e benchmark BR (%s)...", BENCHMARK_TICKER)
+        vix_df = load_vix_data()
+        spy_raw = load_data(BENCHMARK_TICKER)
 
         # Load per-ticker params if flag was set
         if args.use_ticker_params:
@@ -393,14 +390,14 @@ def main() -> None:
             logger.info("TICKER: %s", ticker)
             logger.info("=" * 60)
             try:
-                spy_input   = spy_raw if ticker != "SPY" else None
-                labeled     = stage_prepare(ticker, vix_df=vix_df, spy_df=spy_input)
-                wfv         = stage_walk_forward(labeled, ticker=ticker,
+                spy_input = spy_raw if ticker != BENCHMARK_TICKER else None
+                labeled = stage_prepare(ticker, vix_df=vix_df, spy_df=spy_input)
+                wfv = stage_walk_forward(labeled, ticker=ticker,
                                                  expanding=args.expanding)
-                raw         = load_data(ticker)
+                raw = load_data(ticker)
 
                 # Compute regimes (needed by BacktestEngine regime_filter)
-                rd      = RegimeDetector(method="gmm", n_regimes=3)
+                rd = RegimeDetector(method="gmm", n_regimes=3)
                 regimes = rd.fit_predict(raw["close"])
 
                 # Per-ticker params (None = use global config defaults)
@@ -409,8 +406,8 @@ def main() -> None:
                 trades_df, equity_curve = stage_backtest(
                     wfv, raw, ticker, params=t_params, regimes=regimes
                 )
-                metrics   = stage_performance(trades_df, equity_curve, ticker)
-                all_metrics[ticker]       = metrics
+                metrics = stage_performance(trades_df, equity_curve, ticker)
+                all_metrics[ticker] = metrics
                 all_equity_curves[ticker] = equity_curve
 
                 if metrics:
@@ -424,7 +421,7 @@ def main() -> None:
                     trainer_tmp.fit(labeled)
                     trainer_tmp.save(MODELS_DIR / f"model_final_{ticker}.pkl")
                     exec_engine = ExecutionEngine(trainer=trainer_tmp, equity=args.equity)
-                    sig_path    = LOGS_DIR / f"signals_{ticker}.csv"
+                    sig_path = LOGS_DIR / f"signals_{ticker}.csv"
                     exec_engine.generate_signals(
                         signals_df=wfv.signals_df,
                         ohlcv_df=raw,
@@ -457,68 +454,68 @@ def main() -> None:
             logger.info("\n%s", summary_df.to_string())
 
             # Portfolio-level blended stats
-            pm      = PortfolioManager(equity=args.equity)
-            port_s  = pm.portfolio_summary(all_metrics, all_equity_curves)
+            pm = PortfolioManager(equity=args.equity)
+            port_s = pm.portfolio_summary(all_metrics, all_equity_curves)
             pm.print_summary(port_s)
 
-    # ── PORTFOLIO ────────────────────────────────────────────────────────────
+    # PORTFOLIO
     elif args.mode == "portfolio":
         stage_update(TICKERS)
 
-        vix_df  = load_vix_data()
-        spy_raw = load_data("SPY")
+        vix_df = load_vix_data()
+        spy_raw = load_data(BENCHMARK_TICKER)
 
-        all_metrics:       dict[str, dict]      = {}
+        all_metrics: dict[str, dict] = {}
         all_equity_curves: dict[str, pd.Series] = {}
-        all_returns:       dict[str, pd.Series] = {}
+        all_returns: dict[str, pd.Series] = {}
 
         for ticker in TICKERS:
             logger.info("PORTFOLIO TICKER: %s", ticker)
             try:
-                spy_input = spy_raw if ticker != "SPY" else None
-                labeled   = stage_prepare(ticker, vix_df=vix_df, spy_df=spy_input)
-                wfv       = stage_walk_forward(labeled, ticker=ticker)
-                raw       = load_data(ticker)
+                spy_input = spy_raw if ticker != BENCHMARK_TICKER else None
+                labeled = stage_prepare(ticker, vix_df=vix_df, spy_df=spy_input)
+                wfv = stage_walk_forward(labeled, ticker=ticker)
+                raw = load_data(ticker)
                 trades_df, equity_curve = stage_backtest(wfv, raw, ticker)
-                metrics   = stage_performance(trades_df, equity_curve, ticker)
-                all_metrics[ticker]       = metrics
+                metrics = stage_performance(trades_df, equity_curve, ticker)
+                all_metrics[ticker] = metrics
                 all_equity_curves[ticker] = equity_curve
-                all_returns[ticker]       = raw["close"].pct_change().dropna()
+                all_returns[ticker] = raw["close"].pct_change().dropna()
             except Exception as exc:
                 logger.error("Portfolio ticker %s failed: %s", ticker, exc, exc_info=True)
 
-        pm      = PortfolioManager(equity=args.equity, method="risk_parity")
+        pm = PortfolioManager(equity=args.equity, method="risk_parity")
         summary = pm.portfolio_summary(all_metrics, all_equity_curves)
         pm.print_summary(summary)
 
         if all_returns:
-            returns_df     = pd.DataFrame(all_returns).dropna(how="all")
-            corr           = pm.correlation_matrix(returns_df, flag_threshold=0.80)
+            returns_df = pd.DataFrame(all_returns).dropna(how="all")
+            corr = pm.correlation_matrix(returns_df, flag_threshold=0.80)
             logger.info("Correlation matrix:\n%s", corr.to_string())
 
             active_signals = {t: 1 for t in TICKERS}
-            w_rp  = pm.compute_weights(TICKERS, returns_df, active_signals)
+            w_rp = pm.compute_weights(TICKERS, returns_df, active_signals)
             dr_rp = pm.diversification_ratio(w_rp, returns_df)
             logger.info("Diversification Ratio (risk-parity):  %.4f", dr_rp)
 
             pm_mv = PortfolioManager(equity=args.equity, method="min_variance")
-            w_mv  = pm_mv.compute_weights(TICKERS, returns_df, active_signals)
+            w_mv = pm_mv.compute_weights(TICKERS, returns_df, active_signals)
             dr_mv = pm_mv.diversification_ratio(w_mv, returns_df)
             logger.info("Diversification Ratio (min-variance): %.4f", dr_mv)
 
             pm_ms = PortfolioManager(equity=args.equity, method="max_sharpe")
-            w_ms  = pm_ms.compute_weights(TICKERS, returns_df, active_signals)
+            w_ms = pm_ms.compute_weights(TICKERS, returns_df, active_signals)
             dr_ms = pm_ms.diversification_ratio(w_ms, returns_df)
             logger.info("Diversification Ratio (max-sharpe):   %.4f", dr_ms)
 
-    # ── TRAIN ────────────────────────────────────────────────────────────────
+    # TRAIN
     elif args.mode == "train":
-        vix_df  = load_vix_data()
-        spy_raw = load_data("SPY")
+        vix_df = load_vix_data()
+        spy_raw = load_data(BENCHMARK_TICKER)
         for ticker in ticker_list:
-            spy_input = spy_raw if ticker != "SPY" else None
-            labeled   = stage_prepare(ticker, vix_df=vix_df, spy_df=spy_input)
-            trainer   = stage_train_final(labeled, ticker)
+            spy_input = spy_raw if ticker != BENCHMARK_TICKER else None
+            labeled = stage_prepare(ticker, vix_df=vix_df, spy_df=spy_input)
+            trainer = stage_train_final(labeled, ticker)
 
             # SHAP importance (requires: pip install shap)
             try:
@@ -527,23 +524,22 @@ def main() -> None:
             except Exception as e:
                 logger.debug("SHAP skipped: %s", e)
 
-    # ── LIVE ─────────────────────────────────────────────────────────────────
+    # LIVE
     elif args.mode == "live":
-        vix_df  = load_vix_data()
-        spy_raw = load_data("SPY")
+        vix_df = load_vix_data()
+        spy_raw = load_data(BENCHMARK_TICKER)
         for ticker in ticker_list:
             model_path = MODELS_DIR / f"model_final_{ticker}.pkl"
             if not model_path.exists():
                 logger.info("No saved model for %s — training now...", ticker)
-                spy_input = spy_raw if ticker != "SPY" else None
-                labeled   = stage_prepare(ticker, vix_df=vix_df, spy_df=spy_input)
-                trainer   = stage_train_final(labeled, ticker)
+                spy_input = spy_raw if ticker != BENCHMARK_TICKER else None
+                labeled = stage_prepare(ticker, vix_df=vix_df, spy_df=spy_input)
+                trainer = stage_train_final(labeled, ticker)
             else:
                 trainer = ModelTrainer.load(model_path)
             stage_live(trainer, ticker, args.equity)
 
     logger.info("Pipeline finished.")
-
 
 if __name__ == "__main__":
     main()

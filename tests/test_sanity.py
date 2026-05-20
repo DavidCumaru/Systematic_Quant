@@ -1,4 +1,4 @@
-"""
+﻿"""
 tests/test_sanity.py
 ====================
 Sanity checks that guard the three most dangerous failure modes
@@ -24,15 +24,12 @@ import pytest
 # Make project root importable
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from feature_engineering import build_features
-from labeling import apply_triple_barrier
-from backtest_engine import BacktestEngine
+from autotrader.features.engineering import build_features
+from autotrader.labeling.barriers import apply_triple_barrier
+from autotrader.backtesting.engine import BacktestEngine
 
 
-# ---------------------------------------------------------------------------
 # Fixtures
-# ---------------------------------------------------------------------------
-
 def _make_synthetic_ohlcv(n: int = 500, seed: int = 42) -> pd.DataFrame:
     """Create synthetic 1h OHLCV data with a tz-aware DatetimeIndex."""
     rng = np.random.default_rng(seed)
@@ -44,8 +41,8 @@ def _make_synthetic_ohlcv(n: int = 500, seed: int = 42) -> pd.DataFrame:
         tz="America/New_York",
     )
     close = 100 + np.cumsum(rng.normal(0, 0.5, n))
-    high  = close + rng.uniform(0.1, 1.0, n)
-    low   = close - rng.uniform(0.1, 1.0, n)
+    high = close + rng.uniform(0.1, 1.0, n)
+    low = close - rng.uniform(0.1, 1.0, n)
     open_ = close + rng.normal(0, 0.3, n)
     volume = rng.integers(100_000, 1_000_000, n).astype(float)
 
@@ -70,10 +67,7 @@ def labeled_df(featured_df):
     return apply_triple_barrier(featured_df)
 
 
-# ---------------------------------------------------------------------------
 # Test 1: No look-ahead in features
-# ---------------------------------------------------------------------------
-
 class TestFeatureLookahead:
     """Features at bar t must not depend on prices from bar t+1 or later."""
 
@@ -81,9 +75,9 @@ class TestFeatureLookahead:
         """log_ret at position i should equal log(close[i]/close[i-1]).
         Align by index because build_features drops warm-up NaN rows.
         """
-        close    = featured_df["close"]
+        close = featured_df["close"]
         expected = np.log(close / close.shift(1))
-        shared   = featured_df.index.intersection(expected.dropna().index)
+        shared = featured_df.index.intersection(expected.dropna().index)
         pd.testing.assert_series_equal(
             featured_df["log_ret"].loc[shared],
             expected.loc[shared],
@@ -104,7 +98,7 @@ class TestFeatureLookahead:
 
         rsi_full = featured_df["rsi"].iloc[row_idx]
 
-        from feature_engineering import _rsi
+        from autotrader.features.engineering import _rsi
         truncated = featured_df["close"].iloc[: row_idx + 1]
         rsi_trunc = _rsi(truncated, 14).iloc[-1]
 
@@ -119,9 +113,9 @@ class TestFeatureLookahead:
         Align by index because build_features drops warm-up NaN rows.
         MOMENTUM_WINDOWS = [5, 10, 20] — smallest window is 5.
         """
-        close    = featured_df["close"]
+        close = featured_df["close"]
         expected = close / close.shift(5) - 1
-        shared   = featured_df.index.intersection(expected.dropna().index)
+        shared = featured_df.index.intersection(expected.dropna().index)
         pd.testing.assert_series_equal(
             featured_df["momentum_5"].loc[shared],
             expected.loc[shared],
@@ -140,10 +134,7 @@ class TestFeatureLookahead:
         )
 
 
-# ---------------------------------------------------------------------------
 # Test 2: No look-ahead in labels
-# ---------------------------------------------------------------------------
-
 class TestLabelLookahead:
     """Label for bar t must only use information from bars [t+1, t+TIME_STOP]."""
 
@@ -153,7 +144,7 @@ class TestLabelLookahead:
         If we shorten the dataset by TIME_STOP_BARS, that bar must become NaN
         (no valid forward window), proving the label depends on future data.
         """
-        from config import TIME_STOP_BARS
+        from autotrader.config.settings import TIME_STOP_BARS
 
         labeled_full = apply_triple_barrier(featured_df)
         n = len(labeled_full)
@@ -186,22 +177,19 @@ class TestLabelLookahead:
         assert len(counts) >= 2, "Only one class found in labels — check TP/SL params"
 
 
-# ---------------------------------------------------------------------------
 # Test 3: No overlapping trades in the backtest
-# ---------------------------------------------------------------------------
-
 class TestBacktestPositionDiscipline:
     """Only one open position at a time; exit before next entry."""
 
     def _run_backtest(self, labeled_df, featured_df):
         """Build a minimal signals DataFrame and run the backtest."""
-        from model_training import ModelTrainer
+        from autotrader.models.trainer import ModelTrainer
 
         trainer = ModelTrainer()
         trainer.fit(labeled_df)
 
         proba_df = trainer.predict_proba(labeled_df)
-        signals  = pd.DataFrame({
+        signals = pd.DataFrame({
             "pred":  trainer.predict(labeled_df),
         }, index=labeled_df.index)
         signals = pd.concat([signals, proba_df.add_prefix("proba_")], axis=1)
@@ -223,13 +211,13 @@ class TestBacktestPositionDiscipline:
             t_next = trades[i + 1]
             assert t_next.entry_time >= t_curr.exit_time, (
                 f"Trade overlap detected!\n"
-                f"  Trade {i}: entry={t_curr.entry_time}  exit={t_curr.exit_time}\n"
-                f"  Trade {i+1}: entry={t_next.entry_time}  exit={t_next.exit_time}"
+                f"Trade {i}: entry={t_curr.entry_time}  exit={t_curr.exit_time}\n"
+                f"Trade {i+1}: entry={t_next.entry_time}  exit={t_next.exit_time}"
             )
 
     def test_max_trades_per_day_respected(self, labeled_df, featured_df):
         """No single day should have more than MAX_TRADES_PER_DAY trades."""
-        from backtest_engine import MAX_TRADES_PER_DAY
+        from autotrader.backtesting.engine import MAX_TRADES_PER_DAY
 
         engine = self._run_backtest(labeled_df, featured_df)
         trades = engine.trades
@@ -239,23 +227,20 @@ class TestBacktestPositionDiscipline:
 
         from collections import Counter
         daily_counts = Counter(t.entry_time.date() for t in trades)
-        worst_day    = max(daily_counts.values())
+        worst_day = max(daily_counts.values())
         assert worst_day <= MAX_TRADES_PER_DAY, (
             f"MAX_TRADES_PER_DAY={MAX_TRADES_PER_DAY} violated: "
             f"found {worst_day} trades in a single day"
         )
 
 
-# ---------------------------------------------------------------------------
 # Run directly (without pytest)
-# ---------------------------------------------------------------------------
-
 if __name__ == "__main__":
     import traceback
 
-    raw      = _make_synthetic_ohlcv(600)
+    raw = _make_synthetic_ohlcv(600)
     featured = build_features(raw)
-    labeled  = apply_triple_barrier(featured)
+    labeled = apply_triple_barrier(featured)
 
     suites = [
         TestFeatureLookahead(),
@@ -274,14 +259,14 @@ if __name__ == "__main__":
                 import inspect
                 params = inspect.signature(method).parameters
                 kwargs = {}
-                if "raw_df"      in params: kwargs["raw_df"]      = raw
+                if "raw_df" in params: kwargs["raw_df"] = raw
                 if "featured_df" in params: kwargs["featured_df"] = featured
-                if "labeled_df"  in params: kwargs["labeled_df"]  = labeled
+                if "labeled_df" in params: kwargs["labeled_df"] = labeled
                 method(**kwargs)
-                print(f"  PASS  {suite.__class__.__name__}.{name}")
+                print(f"PASS {suite.__class__.__name__}.{name}")
                 passed += 1
             except Exception as e:
-                print(f"  FAIL  {suite.__class__.__name__}.{name}: {e}")
+                print(f"FAIL {suite.__class__.__name__}.{name}: {e}")
                 traceback.print_exc()
                 failed += 1
 

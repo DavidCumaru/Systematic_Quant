@@ -29,10 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import data_pipeline as dp
 
 
-# ---------------------------------------------------------------------------
 # Fixture: patch DB_PATH to an isolated temp file for each test
-# ---------------------------------------------------------------------------
-
 @pytest.fixture
 def tmp_db(monkeypatch, tmp_path):
     """Redirect all DB operations to a temporary file."""
@@ -46,18 +43,15 @@ def _make_bars(n: int = 20, start: str = "2023-01-02", tz: str = "America/New_Yo
     rng = np.random.default_rng(0)
     close = 100 + np.cumsum(rng.normal(0, 0.5, n))
     return pd.DataFrame({
-        "open":   close,
-        "high":   close + 0.5,
-        "low":    close - 0.5,
-        "close":  close,
+        "open": close,
+        "high": close + 0.5,
+        "low": close - 0.5,
+        "close": close,
         "volume": 1_000_000.0,
     }, index=idx)
 
 
-# ---------------------------------------------------------------------------
 # Schema tests
-# ---------------------------------------------------------------------------
-
 class TestEnsureTable:
 
     def test_creates_table(self, tmp_db):
@@ -76,10 +70,7 @@ class TestEnsureTable:
         conn.close()
 
 
-# ---------------------------------------------------------------------------
 # Upsert tests
-# ---------------------------------------------------------------------------
-
 class TestUpsertBars:
 
     def test_inserts_new_rows(self, tmp_db):
@@ -104,10 +95,7 @@ class TestUpsertBars:
         assert n == 0
 
 
-# ---------------------------------------------------------------------------
 # Load / filter tests
-# ---------------------------------------------------------------------------
-
 class TestLoadData:
 
     def test_empty_for_unknown_ticker(self, tmp_db):
@@ -159,10 +147,7 @@ class TestLoadData:
         assert loaded.index.is_monotonic_increasing
 
 
-# ---------------------------------------------------------------------------
 # last_stored_dt tests
-# ---------------------------------------------------------------------------
-
 class TestLastStoredDt:
 
     def test_returns_none_for_empty_table(self, tmp_db):
@@ -182,14 +167,11 @@ class TestLastStoredDt:
         assert last.date() == bars.index[-1].date()
 
 
-# ---------------------------------------------------------------------------
 # Incremental update test
-# ---------------------------------------------------------------------------
-
 class TestIncrementalUpdate:
 
     def test_only_new_bars_added(self, tmp_db):
-        first_batch  = _make_bars(20, start="2023-01-02")
+        first_batch = _make_bars(20, start="2023-01-02")
         second_batch = _make_bars(30, start="2023-01-02")  # overlaps + extends
 
         conn = sqlite3.connect(tmp_db)
@@ -202,11 +184,7 @@ class TestIncrementalUpdate:
 
         assert n_new == len(new_bars)
 
-
-# ---------------------------------------------------------------------------
 # get_available_tickers
-# ---------------------------------------------------------------------------
-
 class TestGetAvailableTickers:
 
     def test_lists_all_tables(self, tmp_db):

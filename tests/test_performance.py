@@ -1,4 +1,4 @@
-"""
+﻿"""
 tests/test_performance.py
 ==========================
 Unit tests for performance.py.
@@ -22,13 +22,10 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from performance import compute_metrics, monthly_returns_table, print_metrics, sharpe_confidence_interval
+from autotrader.analysis.performance import compute_metrics, monthly_returns_table, print_metrics, sharpe_confidence_interval
 
 
-# ---------------------------------------------------------------------------
 # Helpers
-# ---------------------------------------------------------------------------
-
 def _make_equity(values, freq="B"):
     idx = pd.date_range("2022-01-03", periods=len(values), freq=freq)
     return pd.Series(values, index=idx)
@@ -40,25 +37,22 @@ def _make_trades(n=30, win_rate=0.60, avg_win=300.0, avg_loss=150.0, seed=0):
     t = pd.Timestamp("2022-01-04", tz="America/New_York")
     for i in range(n):
         is_win = rng.random() < win_rate
-        pnl    = avg_win if is_win else -avg_loss
+        pnl = avg_win if is_win else -avg_loss
         rows.append({
-            "entry_time":  t,
-            "exit_time":   t + pd.Timedelta(days=1),
-            "direction":   "LONG",
+            "entry_time": t,
+            "exit_time": t + pd.Timedelta(days=1),
+            "direction": "LONG",
             "entry_price": 100.0,
-            "exit_price":  100.0 + (pnl / 10),
-            "shares":      10,
-            "pnl":         pnl,
+            "exit_price": 100.0 + (pnl / 10),
+            "shares": 10,
+            "pnl": pnl,
             "exit_reason": "tp" if is_win else "sl",
         })
         t += pd.Timedelta(days=2)
     return pd.DataFrame(rows)
 
 
-# ---------------------------------------------------------------------------
 # Tests
-# ---------------------------------------------------------------------------
-
 class TestComputeMetrics:
 
     EXPECTED_KEYS = [

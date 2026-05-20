@@ -1,4 +1,4 @@
-"""
+﻿"""
 tests/conftest.py
 =================
 Shared pytest fixtures for the systematic_alpha test suite.
@@ -14,14 +14,10 @@ import pytest
 # Make project root importable
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from feature_engineering import build_features
-from labeling import apply_triple_barrier
+from autotrader.features.engineering import build_features
+from autotrader.labeling.barriers import apply_triple_barrier
 
-
-# ---------------------------------------------------------------------------
 # Synthetic OHLCV generators
-# ---------------------------------------------------------------------------
-
 def make_ohlcv(n: int = 600, seed: int = 42, freq: str = "1D") -> pd.DataFrame:
     """Generate a synthetic OHLCV DataFrame with tz-aware DatetimeIndex."""
     rng = np.random.default_rng(seed)
@@ -38,10 +34,10 @@ def make_ohlcv(n: int = 600, seed: int = 42, freq: str = "1D") -> pd.DataFrame:
 
     close = 100 + np.cumsum(rng.normal(0, 0.5, n))
     close = np.maximum(close, 1.0)
-    high   = close + rng.uniform(0.1, 1.5, n)
-    low    = close - rng.uniform(0.1, 1.5, n)
-    low    = np.maximum(low, 0.5)
-    open_  = close + rng.normal(0, 0.3, n)
+    high = close + rng.uniform(0.1, 1.5, n)
+    low = close - rng.uniform(0.1, 1.5, n)
+    low = np.maximum(low, 0.5)
+    open_ = close + rng.normal(0, 0.3, n)
     volume = rng.integers(500_000, 5_000_000, n).astype(float)
 
     return pd.DataFrame(
@@ -50,10 +46,7 @@ def make_ohlcv(n: int = 600, seed: int = 42, freq: str = "1D") -> pd.DataFrame:
     )
 
 
-# ---------------------------------------------------------------------------
 # Session-scoped fixtures (expensive to build, shared across the module)
-# ---------------------------------------------------------------------------
-
 @pytest.fixture(scope="session")
 def raw_df():
     return make_ohlcv(600)

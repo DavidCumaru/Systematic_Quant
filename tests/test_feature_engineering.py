@@ -1,4 +1,4 @@
-"""
+﻿"""
 tests/test_feature_engineering.py
 ==================================
 Unit tests for feature_engineering.py
@@ -24,7 +24,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from feature_engineering import (
+from autotrader.features.engineering import (
     _atr,
     _garman_klass_vol,
     _macd,

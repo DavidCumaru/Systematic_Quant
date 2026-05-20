@@ -15,7 +15,7 @@
 #
 # ============================================================
 
-# ── Stage 1: builder ──────────────────────────────────────────────────────────
+# Stage 1: builder
 FROM python:3.11-slim AS builder
 
 # System build dependencies (for LightGBM, scipy, matplotlib C extensions)
@@ -35,7 +35,7 @@ RUN python -m venv /opt/venv && \
     /opt/venv/bin/pip install --upgrade pip && \
     /opt/venv/bin/pip install --no-cache-dir -r requirements.txt
 
-# ── Stage 2: runtime ──────────────────────────────────────────────────────────
+# Stage 2: runtime
 FROM python:3.11-slim AS runtime
 
 LABEL maintainer="systematic-alpha"
@@ -76,6 +76,6 @@ USER appuser
 # Default command: show help
 CMD ["python", "main.py", "--help"]
 
-# ── Health check ─────────────────────────────────────────────────────────────
+#Health check
 HEALTHCHECK --interval=60s --timeout=10s --start-period=10s --retries=3 \
-    CMD python -c "import config; print('OK')" || exit 1
+    CMD python -c "from autotrader.config.settings import BASE_DIR; print('OK')" || exit 1

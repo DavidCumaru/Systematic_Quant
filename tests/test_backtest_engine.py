@@ -1,4 +1,4 @@
-"""
+﻿"""
 tests/test_backtest_engine.py
 ==============================
 Unit tests for backtest_engine.py.
@@ -24,51 +24,46 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from backtest_engine import BacktestEngine, MAX_TRADES_PER_DAY
-from model_training import ModelTrainer
-from config import INITIAL_EQUITY
+from autotrader.backtesting.engine import BacktestEngine, MAX_TRADES_PER_DAY
+from autotrader.models.trainer import ModelTrainer
+from autotrader.config.settings import INITIAL_EQUITY
 
 
-# ---------------------------------------------------------------------------
 # Helper to build a minimal signals DataFrame
-# ---------------------------------------------------------------------------
-
 def _build_signals(labeled_df: pd.DataFrame) -> pd.DataFrame:
     trainer = ModelTrainer()
     trainer.fit(labeled_df)
     proba_df = trainer.predict_proba(labeled_df)
-    preds    = trainer.predict(labeled_df)
-    signals  = pd.DataFrame({"pred": preds}, index=labeled_df.index)
-    signals  = pd.concat([signals, proba_df.add_prefix("proba_")], axis=1)
+    preds = trainer.predict(labeled_df)
+    signals = pd.DataFrame({"pred": preds}, index=labeled_df.index)
+    signals = pd.concat([signals, proba_df.add_prefix("proba_")], axis=1)
     return signals
-
 
 class TestEquityCurve:
 
     def test_equity_curve_length_matches_ohlcv(self, labeled_df, featured_df):
         signals = _build_signals(labeled_df)
-        engine  = BacktestEngine(df=featured_df, signals=signals, equity=INITIAL_EQUITY)
+        engine = BacktestEngine(df=featured_df, signals=signals, equity=INITIAL_EQUITY)
         engine.run()
         assert len(engine.equity_curve) == len(featured_df)
 
     def test_equity_curve_starts_at_initial_equity(self, labeled_df, featured_df):
         signals = _build_signals(labeled_df)
-        engine  = BacktestEngine(df=featured_df, signals=signals, equity=INITIAL_EQUITY)
+        engine = BacktestEngine(df=featured_df, signals=signals, equity=INITIAL_EQUITY)
         engine.run()
         assert engine.equity_curve.iloc[0] == pytest.approx(INITIAL_EQUITY)
 
     def test_equity_curve_index_is_datetime(self, labeled_df, featured_df):
         signals = _build_signals(labeled_df)
-        engine  = BacktestEngine(df=featured_df, signals=signals, equity=INITIAL_EQUITY)
+        engine = BacktestEngine(df=featured_df, signals=signals, equity=INITIAL_EQUITY)
         engine.run()
         assert isinstance(engine.equity_curve.index, pd.DatetimeIndex)
-
 
 class TestPositionDiscipline:
 
     def test_no_overlapping_trades(self, labeled_df, featured_df):
         signals = _build_signals(labeled_df)
-        engine  = BacktestEngine(df=featured_df, signals=signals)
+        engine = BacktestEngine(df=featured_df, signals=signals)
         engine.run()
         trades = engine.trades
 
@@ -84,13 +79,13 @@ class TestPositionDiscipline:
     def test_max_trades_per_day(self, labeled_df, featured_df):
         from collections import Counter
         signals = _build_signals(labeled_df)
-        engine  = BacktestEngine(df=featured_df, signals=signals)
+        engine = BacktestEngine(df=featured_df, signals=signals)
         engine.run()
         if not engine.trades:
             pytest.skip("No trades produced")
 
         daily_counts = Counter(t.entry_time.date() for t in engine.trades)
-        worst_day    = max(daily_counts.values())
+        worst_day = max(daily_counts.values())
         assert worst_day <= MAX_TRADES_PER_DAY
 
 
@@ -98,8 +93,6 @@ class TestFillPrice:
 
     def setup_method(self):
         # Minimal BacktestEngine instance to test internal methods
-        import pandas as pd
-        import numpy as np
         rng = np.random.default_rng(0)
         n = 100
         idx = pd.bdate_range("2022-01-03", periods=n, tz="America/New_York")
@@ -123,17 +116,16 @@ class TestFillPrice:
 
     def test_fill_price_symmetric(self):
         base = 100.0
-        long_fill  = self.engine._fill_price(base, direction=1)
+        long_fill = self.engine._fill_price(base, direction=1)
         short_fill = self.engine._fill_price(base, direction=-1)
         # Should be symmetric around base
         assert abs((long_fill - base) - (base - short_fill)) < 1e-9
-
 
 class TestTradesDf:
 
     def test_trades_df_columns(self, labeled_df, featured_df):
         signals = _build_signals(labeled_df)
-        engine  = BacktestEngine(df=featured_df, signals=signals)
+        engine = BacktestEngine(df=featured_df, signals=signals)
         trades_df = engine.run()
 
         if trades_df.empty:
@@ -147,7 +139,7 @@ class TestTradesDf:
 
     def test_direction_values(self, labeled_df, featured_df):
         signals = _build_signals(labeled_df)
-        engine  = BacktestEngine(df=featured_df, signals=signals)
+        engine = BacktestEngine(df=featured_df, signals=signals)
         trades_df = engine.run()
         if trades_df.empty:
             pytest.skip("No trades produced")
@@ -155,7 +147,7 @@ class TestTradesDf:
 
     def test_exit_reason_values(self, labeled_df, featured_df):
         signals = _build_signals(labeled_df)
-        engine  = BacktestEngine(df=featured_df, signals=signals)
+        engine = BacktestEngine(df=featured_df, signals=signals)
         trades_df = engine.run()
         if trades_df.empty:
             pytest.skip("No trades produced")

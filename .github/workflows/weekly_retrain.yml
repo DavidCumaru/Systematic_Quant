@@ -1,0 +1,97 @@
+name: Retreinamento Semanal
+
+on:
+  schedule:
+    - cron: '0 10 * * 6' # Sabado 07:00 BRT = 10:00 UTC
+  workflow_dispatch: # permite rodar manualmente pelo site do GitHub
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  retrain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180 # 3 horas maximo
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout do repositorio
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          persist-credentials: true
+
+      - name: Configura Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Instala dependencias
+        run: |
+          pip install -q --upgrade pip
+          # mlflow requer pandas<3; mlflow-skinny e mlflow-tracing conflitam com mlflow
+          # (arquivos duplicados - mlflow/mlflow#17267) — instalar somente mlflow completo
+          grep -v -i "MetaTrader5\|mlflow\|pandas\|streamlit" requirements.txt > req_linux.txt
+          pip install -q -r req_linux.txt
+          pip install -q "pandas>=2.2,<3" "mlflow~=3.10.0"
+          pip install -q pytrends   # Google Trends para features (consistencia com daily_scan)
+
+      - name: Valida imports criticos
+        run: |
+          python -c "
+          import autotrader
+          import yfinance
+          import mlflow
+          import lightgbm
+          import pandas as pd
+          import numpy as np
+          print(f'OK: pandas={pd.__version__}  mlflow={mlflow.__version__}')
+          "
+
+      - name: Restaura banco de dados do cache
+        uses: actions/cache@v4
+        with:
+          path: data/market_data.db
+          key: market-db-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            market-db-${{ runner.os }}-
+
+      - name: Atualiza dados de mercado
+        env:
+          BROKER_MODE: paper
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python main.py --mode update \
+            --tickers PRIO3.SA LREN3.SA SUZB3.SA EQTL3.SA \
+                      ITUB4.SA VIVT3.SA KLBN11.SA BBAS3.SA
+
+      - name: Retreina modelos
+        env:
+          BROKER_MODE: paper
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python main.py --mode research \
+            --tickers PRIO3.SA LREN3.SA SUZB3.SA EQTL3.SA \
+                      ITUB4.SA VIVT3.SA KLBN11.SA BBAS3.SA
+
+      - name: Salva banco de dados atualizado
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: data/market_data.db
+          key: market-db-${{ runner.os }}-${{ github.run_id }}
+
+      - name: Salva modelos e cache do banco
+        run: |
+          git config user.name  "Systematic Alpha Bot"
+          git config user.email "bot@noreply.github.com"
+          git add models/ || true
+          git diff --staged --quiet || (
+            git commit -m "chore: modelos atualizados $(date +%Y-%m-%d)" &&
+            git push
+          )

@@ -1,4 +1,4 @@
-"""
+﻿"""
 tests/test_risk_management.py
 ==============================
 Unit tests for risk_management.py.
@@ -36,7 +36,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from risk_management import PositionSizer, RiskGuard, RiskMetrics
+from autotrader.risk.management import PositionSizer, RiskGuard, RiskMetrics
 
 
 class TestPositionSizer:
@@ -51,12 +51,12 @@ class TestPositionSizer:
         assert self.sizer.shares(100_000, 0.0, 0.01) == 0
 
     def test_fixed_risk_formula(self):
-        equity       = 100_000
-        entry_price  = 50.0
-        stop_pct     = 0.02          # 2% stop
-        dollar_risk  = equity * 0.01  # 1% of equity = $1000
-        stop_dist    = entry_price * stop_pct  # $1
-        raw_shares   = dollar_risk / stop_dist  # 1000
+        equity = 100_000
+        entry_price = 50.0
+        stop_pct = 0.02          # 2% stop
+        dollar_risk = equity * 0.01  # 1% of equity = $1000
+        stop_dist  = entry_price * stop_pct  # $1
+        raw_shares = dollar_risk / stop_dist  # 1000
         # notional cap: 20% of 100_000 / 50 = 400 shares
         expected = min(int(raw_shares), int(equity * 0.20 / entry_price))
         assert self.sizer.shares(equity, entry_price, stop_pct) == expected

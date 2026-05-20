@@ -56,17 +56,17 @@ credentials.json
 # =============================================================================
 # Data & Databases
 # =============================================================================
-data/
-*.db
+# Exclui arquivos pesados mas inclui o banco de dados
+data/COTAHIST_*.ZIP
+data/news_cache/
+data/sim_march.json
 *.sqlite
 *.sqlite3
 
 # =============================================================================
 # Models & Artifacts
 # =============================================================================
-models/
-*.pkl
-*.joblib
+# Inclui modelos (.pkl) — necessarios para PythonAnywhere e GitHub Actions
 *.h5
 *.pt
 *.pth

@@ -1,4 +1,4 @@
-"""
+﻿"""
 tests/test_model_training.py
 =============================
 Unit tests for model_training.py.
@@ -24,8 +24,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from model_training import ModelTrainer, temporal_split
-
+from autotrader.models.trainer import ModelTrainer, temporal_split
 
 class TestModelTrainer:
 

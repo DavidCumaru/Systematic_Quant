@@ -1,0 +1,44 @@
+{
+  "initial_equity": 8000.0,
+  "cash": 6470.63,
+  "pending": [],
+  "open_positions": {
+    "PRIO3.SA": {
+      "ticker": "PRIO3.SA",
+      "direction": "BUY",
+      "qty": 23,
+      "entry_price": 67.7699966430664,
+      "notional": 1558.71,
+      "stop_loss": 67.4485,
+      "take_profit": 68.6032,
+      "opened_at": "2026-04-03T01:20:55.854336+00:00",
+      "order_id": "b91b9ff7",
+      "confidence": 0.5048
+    },
+    "WEGE3.SA": {
+      "ticker": "WEGE3.SA",
+      "direction": "BUY",
+      "qty": 31,
+      "entry_price": 50.310001373291016,
+      "notional": 1559.61,
+      "stop_loss": 50.0722,
+      "take_profit": 50.9295,
+      "opened_at": "2026-04-03T01:21:02.785663+00:00",
+      "order_id": "b8f363dc",
+      "confidence": 0.5664
+    },
+    "PETR4.SA": {
+      "ticker": "PETR4.SA",
+      "direction": "SELL",
+      "qty": 33,
+      "entry_price": 48.150001525878906,
+      "notional": 1588.95,
+      "stop_loss": 48.5534,
+      "take_profit": 47.7337,
+      "opened_at": "2026-04-03T01:21:09.084134+00:00",
+      "order_id": "8360cf98",
+      "confidence": 0.5273
+    }
+  },
+  "closed_trades": []
+}

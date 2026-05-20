@@ -1,29 +1,25 @@
 """
 scheduler.py
 ============
-Daily automation for the Systematic Alpha pipeline.
+Automacao diaria do pipeline Systematic Alpha — mercado B3.
 
-Schedule
---------
-  08:30 ET (weekdays) — update data (incremental download)
-  09:40 ET (weekdays) — live signal scan for all tickers + Telegram alerts
-  Saturday 07:00      — full research re-run + model retrain (weekly refresh)
+Agenda (horario de Brasilia):
+  09:30  dias uteis  — atualiza dados (download incremental)
+  10:10  dias uteis  — scan de sinais + envia ordens ao MT5
+  17:35  dias uteis  — resumo do dia via Telegram
+  Sabado 07:00       — retreinamento semanal dos modelos
 
-Usage
------
-  # Run in background (keep terminal open or use a process manager)
-  python scheduler.py
+Uso:
+  python scheduler.py            # roda continuamente (deixe aberto ou use Task Scheduler)
+  python scheduler.py --agora    # executa o scan imediatamente (teste)
 
-  # Or import and call manually:
-  from scheduler import run_daily_update, run_live_scan
-
-Environment variables required for live execution:
-  TELEGRAM_TOKEN, TELEGRAM_CHAT_ID   — for signal notifications
-  ALPACA_KEY, ALPACA_SECRET          — for paper/live order execution
-
-Dependencies:  pip install schedule
+Prerequisitos:
+  pip install schedule
+  MetaTrader 5 aberto e logado
+  TELEGRAM_TOKEN e TELEGRAM_CHAT_ID preenchidos em config.py (opcional)
 """
 
+import argparse
 import logging
 import sys
 import time
@@ -31,175 +27,261 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-# Add project root to path so imports work when run directly
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 try:
     import schedule
-    _SCHEDULE_OK = True
 except ImportError:
-    _SCHEDULE_OK = False
+    print("Instale o schedule: pip install schedule")
+    sys.exit(1)
 
-from config import INITIAL_EQUITY, MODELS_DIR, TICKERS, TIMEZONE
-from data_pipeline import load_data, load_vix_data, update_data
-from feature_engineering import build_features
-from model_training import ModelTrainer
-from notifier import Notifier
-from execution_engine import ExecutionEngine
+from autotrader.config.settings import (
+    BROKER_MODE, INITIAL_EQUITY, LIVE_TICKERS, MODELS_DIR,
+    MT5_LOGIN, MT5_PASSWORD, MT5_SERVER, TIMEZONE,
+)
+from autotrader.data.pipeline import load_data, update_data
+from autotrader.features.engineering import build_features
+from autotrader.models.trainer import ModelTrainer
+from autotrader.execution.engine import ExecutionEngine
+from autotrader.execution.broker_mt5 import get_broker
+from autotrader.utils.notifier import Notifier
+from autotrader.utils.journal import journal_add_signal, journal_send_weekly_summary, journal_open_tickers
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
+    handlers=[
+        logging.StreamHandler(
+            open(sys.stdout.fileno(), mode="w", encoding="utf-8", closefd=False)
+        ),
+        logging.FileHandler("logs/scheduler.log", encoding="utf-8"),
+    ],
 )
-logger = logging.getLogger("scheduler")
+logger   = logging.getLogger("scheduler")
 notifier = Notifier()
+BRT      = ZoneInfo(TIMEZONE)
 
-ET = ZoneInfo(TIMEZONE)
+
+# Feriados B3 fixos (ano corrente) — acrescente conforme necessário
+_FERIADOS_B3 = {
+    "2026-01-01", "2026-02-16", "2026-02-17", "2026-04-03",
+    "2026-04-21", "2026-05-01", "2026-06-04", "2026-09-07",
+    "2026-10-12", "2026-11-02", "2026-11-15", "2026-11-20",
+    "2026-12-25",
+}
+
+def _is_market_day() -> bool:
+    hoje = datetime.now(BRT)
+    if hoje.weekday() >= 5: # sabado/domingo
+        return False
+    if hoje.strftime("%Y-%m-%d") in _FERIADOS_B3:
+        return False
+    return True
 
 
-# ---------------------------------------------------------------------------
-# Core jobs
-# ---------------------------------------------------------------------------
-
-def run_daily_update() -> None:
-    """08:30 ET — refresh intraday data for all tickers."""
-    now = datetime.now(ET)
-    logger.info("=== Daily data update started  %s ===", now.strftime("%Y-%m-%d %H:%M ET"))
+# Job 1 — Atualiza dados (09:30 BRT)
+def job_atualiza_dados() -> None:
+    if not _is_market_day():
+        return
+    logger.info("=== JOB: Atualizacao de dados ===")
     try:
-        update_data(tickers=TICKERS)
-        logger.info("Data update complete.")
-        notifier.alert("Data update complete for " + ", ".join(TICKERS))
-    except Exception as exc:
-        logger.error("Data update failed: %s", exc, exc_info=True)
-        notifier.alert(f"ERROR: Data update failed — {exc}")
+        update_data(tickers=LIVE_TICKERS)
+        logger.info("Dados atualizados: %d tickers", len(LIVE_TICKERS))
+    except Exception as e:
+        logger.error("Falha na atualizacao: %s", e, exc_info=True)
+        notifier.alert(f"ERRO: atualizacao de dados falhou — {e}")
 
 
-def run_live_scan(equity: float = INITIAL_EQUITY) -> None:
-    """
-    09:40 ET — load saved models, scan latest bar, emit signals.
+# Job 2 — Scan de sinais e envio de ordens (10:10 BRT)
+def job_scan_sinais() -> None:
+    if not _is_market_day():
+        return
 
-    For each ticker:
-      1. Load the saved final model (train if missing)
-      2. Build features on the latest data
-      3. Run live scan — emit signal if confidence >= threshold
-      4. Send Telegram notification
-      5. Submit paper order via Alpaca if configured
-    """
-    now = datetime.now(ET)
-    logger.info("=== Live signal scan started  %s ===", now.strftime("%Y-%m-%d %H:%M ET"))
+    agora = datetime.now(BRT).strftime("%Y-%m-%d %H:%M BRT")
+    logger.info("=== JOB: Scan de sinais  %s ===", agora)
 
-    # Load VIX and SPY once (shared across all tickers)
-    vix_df  = load_vix_data()
-    spy_raw = load_data("SPY")
+    # Inicializa broker (MT5 ou paper)
+    try:
+        broker = get_broker(
+            BROKER_MODE,
+            login=MT5_LOGIN,
+            password=MT5_PASSWORD,
+            server=MT5_SERVER,
+        )
+        info = broker.account_info()
+        if info:
+            equity = float(info.get("equity", INITIAL_EQUITY))
+            logger.info("Broker: %s | Conta: %s | Equity: R$ %.2f",
+                        BROKER_MODE, info.get("login",""), equity)
+        else:
+            equity = INITIAL_EQUITY
+            logger.warning("Broker nao retornou info de conta — usando equity padrao")
+    except Exception as e:
+        logger.error("Falha ao conectar broker: %s", e)
+        notifier.alert(f"ERRO: broker nao conectou — {e}")
+        equity = INITIAL_EQUITY
+        broker = None
 
-    for ticker in TICKERS:
+    sinais_gerados = []
+    open_tickers = journal_open_tickers()   # tickers com posicao aberta hoje
+
+    for ticker in LIVE_TICKERS:
         try:
-            # Load or train model
+            # Bloqueia novo sinal se ja existe posicao aberta neste ticker
+            if ticker in open_tickers:
+                logger.info("[%s] Posicao ja aberta — pulando sinal", ticker)
+                continue
+
+            # Carrega modelo
             model_path = MODELS_DIR / f"model_final_{ticker}.pkl"
-            if model_path.exists():
-                trainer = ModelTrainer.load(model_path)
-            else:
-                logger.info("No saved model for %s — training now...", ticker)
-                raw     = load_data(ticker)
-                from labeling import apply_triple_barrier
-                featured = build_features(raw, spy_df=spy_raw if ticker != "SPY" else None,
-                                          vix_df=vix_df, ticker=ticker)
-                labeled  = apply_triple_barrier(featured)
-                trainer  = ModelTrainer()
-                trainer.fit(labeled)
-                trainer.save(model_path)
+            if not model_path.exists():
+                logger.warning("[%s] Modelo nao encontrado — pulando", ticker)
+                continue
+            trainer = ModelTrainer.load(model_path)
 
-            # Build features on latest data
-            raw      = load_data(ticker)
-            featured = build_features(
-                raw,
-                spy_df=spy_raw if ticker != "SPY" else None,
-                vix_df=vix_df,
-                ticker=ticker,
-            )
-            latest   = featured.tail(200)  # warm-up window
+            # Carrega e prepara features
+            raw_df = load_data(ticker)
+            if raw_df is None or raw_df.empty:
+                logger.warning("[%s] Sem dados — pulando", ticker)
+                continue
 
-            # Generate signal
+            feat_df = build_features(raw_df, ticker=ticker)
+            if feat_df is None or feat_df.empty:
+                logger.warning("[%s] Sem features — pulando", ticker)
+                continue
+
+            latest = feat_df.tail(200)   # janela de aquecimento
+
+            # Gera sinal
             engine = ExecutionEngine(trainer=trainer, equity=equity)
             signal = engine.run_live_scan(latest, ticker=ticker)
 
             if signal:
-                engine.print_signal(signal)
-                # Telegram notification
+                logger.info("[%s] SINAL: %s @ R$%.2f  conf=%.1f%%",
+                            ticker, signal["direction"], signal["entry_price"],
+                            signal["confidence"] * 100)
+
+                # Injeta equity no sinal para recalculo de tamanho apos gap adjustment
+                signal["_equity"] = equity
+
+                # Envia ordem ao broker (gap protection + recalculo SL/TP automatico)
+                result = engine.submit_paper_order(signal)
+
+                if result is None:
+                    logger.info("[%s] Sinal cancelado pela gap protection", ticker)
+                    continue
+
+                status = result.get("status", "?")
+                logger.info("[%s] Ordem enviada: status=%s", ticker, status)
+
+                # Notifica com preco real apos ajuste
                 notifier.signal(
                     ticker=ticker,
                     direction=signal["direction"],
-                    price=signal["entry_price"],
+                    price=float(result.get("fill_price", signal["entry_price"])),
                     stop=signal["stop_loss"],
                     tp=signal["take_profit"],
-                    shares=signal["position_size"],
+                    shares=int(result.get("shares", signal["position_size"])),
                     confidence=signal["confidence"],
-                    signal_id=signal["signal_id"],
+                    signal_id=signal.get("signal_id", ""),
+                    broker_mode=BROKER_MODE,
                 )
-                # Alpaca paper order submission
-                engine.submit_alpaca_order(signal)
+                # Registra no journal de trades
+                journal_add_signal(signal, capital=equity)
+                sinais_gerados.append(signal)
             else:
-                logger.info("[%s] No signal this bar.", ticker)
+                logger.info("[%s] Sem sinal hoje", ticker)
 
-        except Exception as exc:
-            logger.error("Live scan failed for %s: %s", ticker, exc, exc_info=True)
-            notifier.alert(f"ERROR: Live scan failed for {ticker} — {exc}")
+        except Exception as e:
+            logger.error("[%s] Erro no scan: %s", ticker, e, exc_info=True)
+            notifier.alert(f"ERRO no scan de {ticker}: {e}")
+
+    if not sinais_gerados:
+        logger.info("Nenhum sinal gerado hoje.")
+    else:
+        logger.info("Total de sinais: %d", len(sinais_gerados))
 
 
-def run_weekly_research() -> None:
-    """Saturday 07:00 ET — full research pipeline + model retrain for all tickers."""
-    logger.info("=== Weekly research re-run started ===")
-    notifier.alert("Weekly model retraining started for " + ", ".join(TICKERS))
+# Job 3 — Resumo do dia (17:35 BRT)
+def job_resumo_dia() -> None:
+    if not _is_market_day():
+        return
+    logger.info("=== JOB: Resumo do dia ===")
+    try:
+        broker = get_broker(BROKER_MODE, login=MT5_LOGIN,
+                            password=MT5_PASSWORD, server=MT5_SERVER)
+        info = broker.account_info() or {}
+        equity = float(info.get("equity", INITIAL_EQUITY))
+        balance = float(info.get("balance", INITIAL_EQUITY))
+        pnl_dia = equity - balance
+        posicoes = broker.get_open_positions()
+        notifier.daily_summary(equity=equity, pnl_day=pnl_dia, open_positions=posicoes)
+
+        # Sexta-feira: envia resumo semanal do journal
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        if datetime.now(ZoneInfo(TIMEZONE)).weekday() == 4:  # 4 = sexta
+            logger.info("Sexta-feira: enviando resumo semanal...")
+            journal_send_weekly_summary(capital=equity, notifier=notifier)
+
+    except Exception as e:
+        logger.error("Resumo falhou: %s", e)
+
+
+# Job 4 — Retreinamento semanal (Sabado 07:00 BRT)
+def job_retreinamento() -> None:
+    logger.info("=== JOB: Retreinamento semanal ===")
+    notifier.alert("Retreinamento semanal iniciado...")
     try:
         import subprocess
-        result = subprocess.run(
+        r = subprocess.run(
             [sys.executable, "main.py", "--mode", "research",
-             "--tickers"] + TICKERS,
-            capture_output=False,
+             "--tickers"] + LIVE_TICKERS,
             cwd=str(Path(__file__).resolve().parent),
         )
-        if result.returncode == 0:
-            notifier.alert("Weekly research complete.")
-        else:
-            notifier.alert("Weekly research finished with errors — check logs.")
-    except Exception as exc:
-        logger.error("Weekly research failed: %s", exc, exc_info=True)
-        notifier.alert(f"ERROR: Weekly research failed — {exc}")
+        msg = "Retreinamento concluido." if r.returncode == 0 else "Retreinamento terminou com erros."
+        notifier.alert(msg)
+        logger.info(msg)
+    except Exception as e:
+        logger.error("Retreinamento falhou: %s", e, exc_info=True)
+        notifier.alert(f"ERRO no retreinamento: {e}")
 
-
-# ---------------------------------------------------------------------------
 # Entry point
-# ---------------------------------------------------------------------------
-
-def _is_market_day() -> bool:
-    """Return True if today is a weekday (Mon-Fri). Simple market day proxy."""
-    return datetime.now(ET).weekday() < 5  # 0=Mon, 4=Fri
-
-
 def main() -> None:
-    if not _SCHEDULE_OK:
-        logger.error("'schedule' not installed. Run: pip install schedule")
-        sys.exit(1)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--agora", action="store_true",
+                        help="Executa o scan imediatamente (modo teste)")
+    args = parser.parse_args()
 
-    logger.info("Systematic Alpha Scheduler starting...")
-    logger.info("Tickers: %s", TICKERS)
-    logger.info("Timezone: %s", TIMEZONE)
+    if args.agora:
+        logger.info("Modo --agora: executando scan imediato...")
+        job_atualiza_dados()
+        job_scan_sinais()
+        return
 
-    # Register jobs
-    schedule.every().day.at("08:30").do(
-        lambda: run_daily_update() if _is_market_day() else None
+    logger.info("=" * 55)
+    logger.info("Systematic Alpha — Scheduler B3")
+    logger.info("Tickers: %s", ", ".join(LIVE_TICKERS))
+    logger.info("Broker:  %s", BROKER_MODE)
+    logger.info("=" * 55)
+
+    schedule.every().day.at("09:30").do(job_atualiza_dados)
+    schedule.every().day.at("10:10").do(job_scan_sinais)
+    schedule.every().day.at("17:35").do(job_resumo_dia)
+    schedule.every().saturday.at("07:00").do(job_retreinamento)
+
+    logger.info("Agendamentos:")
+    logger.info("09:30 BRT (dias uteis) — atualizacao de dados")
+    logger.info("10:10 BRT (dias uteis) — scan de sinais + ordens MT5")
+    logger.info("17:35 BRT (dias uteis) — resumo do dia")
+    logger.info("Sabado 07:00 — retreinamento semanal")
+    logger.info("Rodando... (Ctrl+C para parar)\n")
+
+    notifier.alert(
+        f"Systematic Alpha iniciado\n"
+        f"Tickers: {', '.join(LIVE_TICKERS)}\n"
+        f"Broker: {BROKER_MODE}"
     )
-    schedule.every().day.at("09:40").do(
-        lambda: run_live_scan()    if _is_market_day() else None
-    )
-    schedule.every().saturday.at("07:00").do(run_weekly_research)
-
-    logger.info("Jobs scheduled:")
-    logger.info("  08:30 ET (weekdays) — data update")
-    logger.info("  09:40 ET (weekdays) — live signal scan")
-    logger.info("  Saturday 07:00      — weekly model retrain")
-    logger.info("Scheduler running — press Ctrl+C to stop.\n")
 
     while True:
         schedule.run_pending()
