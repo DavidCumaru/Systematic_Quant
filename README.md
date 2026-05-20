@@ -38,11 +38,7 @@ O sistema envia alertas automáticos para o Telegram em tempo real:
 
 ### Exemplo de Notificação
 
-<!-- ============================================================ -->
-<!-- SUBSTITUA A LINHA ABAIXO PELA SUA IMAGEM DO TELEGRAM        -->
-<!-- Arraste a imagem para a pasta docs/images/ e ajuste o path  -->
-<!-- Exemplo: ![Telegram](docs/images/telegram.png)              -->
-<!-- ============================================================ -->
+[Telegram](docs/images/telegram.png)
 
 > *Adicione aqui um screenshot das notificações do Telegram.*
 > Para inserir: salve a imagem em `docs/images/telegram.png` e substitua a linha acima por:
@@ -304,13 +300,13 @@ EMBARGO_BARS = 3    # evita leakage treino->teste
 
 # Parâmetros de execução (substituídos por ticker após grid search)
 MIN_PROBA_THRESHOLD = 0.58   # confiança mínima para gerar sinal
-STOP_LOSS_PCT       = 0.010  # 1.0% stop loss
-TAKE_PROFIT_PCT     = 0.030  # 3.0% take profit (R:R 3:1)
-TIME_STOP_BARS      = 3      # máximo de dias na posição
+STOP_LOSS_PCT = 0.010  # 1.0% stop loss
+TAKE_PROFIT_PCT = 0.030  # 3.0% take profit (R:R 3:1)
+TIME_STOP_BARS = 3      # máximo de dias na posição
 
 # Risco
-RISK_PER_TRADE   = 0.01   # 1% do capital por trade
-DAILY_STOP_PCT   = 0.03   # 3% perda diária -> kill-switch
+RISK_PER_TRADE = 0.01   # 1% do capital por trade
+DAILY_STOP_PCT = 0.03   # 3% perda diária -> kill-switch
 MAX_DRAWDOWN_PCT = 0.10   # 10% drawdown -> halt
 
 # Broker
