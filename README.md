@@ -40,9 +40,7 @@ O sistema envia alertas automáticos para o Telegram em tempo real:
 
 [Telegram](docs/images/telegram.png)
 
-> *Adicione aqui um screenshot das notificações do Telegram.*
-> Para inserir: salve a imagem em `docs/images/telegram.png` e substitua a linha acima por:
-> `![Notificação Telegram](docs/images/telegram.png)`
+![Notificação Telegram](docs/images/telegram.png)
 
 ---
 
