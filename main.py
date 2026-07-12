@@ -169,6 +169,7 @@ def stage_backtest(
         equity=INITIAL_EQUITY,
         params=params,
         regimes=regimes,
+        ticker=ticker,
     )
     trades_df = engine.run()
     equity_curve = engine.equity_curve

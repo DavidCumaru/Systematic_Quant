@@ -1,0 +1,198 @@
+{
+  "timestamp": "2026-06-28T21:38:47.925336",
+  "git_commit": "371f26cd342a",
+  "seed": 42,
+  "period_start": "2000-01-02",
+  "period_end": "2026-06-26",
+  "tickers": [
+    "PRIO3.SA",
+    "LREN3.SA",
+    "SUZB3.SA",
+    "EQTL3.SA",
+    "ITUB4.SA",
+    "VIVT3.SA",
+    "KLBN11.SA",
+    "BBAS3.SA"
+  ],
+  "params_used": {
+    "PRIO3.SA": {
+      "min_proba_threshold": 0.48,
+      "stop_loss_pct": 0.005,
+      "take_profit_pct": 0.018,
+      "time_stop_bars": 2,
+      "direction": "both",
+      "regime_filter": "all",
+      "use_trend_filter": true,
+      "trend_ma_bars": 200
+    },
+    "LREN3.SA": {
+      "min_proba_threshold": 0.48,
+      "stop_loss_pct": 0.005,
+      "take_profit_pct": 0.018,
+      "time_stop_bars": 2,
+      "direction": "both",
+      "regime_filter": "all",
+      "use_trend_filter": true,
+      "trend_ma_bars": 200
+    },
+    "SUZB3.SA": {
+      "min_proba_threshold": 0.48,
+      "stop_loss_pct": 0.005,
+      "take_profit_pct": 0.012,
+      "time_stop_bars": 2,
+      "direction": "both",
+      "regime_filter": "all",
+      "use_trend_filter": true,
+      "trend_ma_bars": 200
+    },
+    "EQTL3.SA": {
+      "min_proba_threshold": 0.6,
+      "stop_loss_pct": 0.005,
+      "take_profit_pct": 0.025,
+      "time_stop_bars": 2,
+      "direction": "both",
+      "regime_filter": "all",
+      "use_trend_filter": true,
+      "trend_ma_bars": 200
+    },
+    "ITUB4.SA": {
+      "min_proba_threshold": 0.48,
+      "stop_loss_pct": 0.005,
+      "take_profit_pct": 0.025,
+      "time_stop_bars": 2,
+      "direction": "both",
+      "regime_filter": "all",
+      "use_trend_filter": true,
+      "trend_ma_bars": 200
+    },
+    "VIVT3.SA": {
+      "min_proba_threshold": 0.48,
+      "stop_loss_pct": 0.005,
+      "take_profit_pct": 0.018,
+      "time_stop_bars": 5,
+      "direction": "both",
+      "regime_filter": "all",
+      "use_trend_filter": true,
+      "trend_ma_bars": 200
+    },
+    "KLBN11.SA": {
+      "min_proba_threshold": 0.48,
+      "stop_loss_pct": 0.005,
+      "take_profit_pct": 0.018,
+      "time_stop_bars": 2,
+      "direction": "both",
+      "regime_filter": "all",
+      "use_trend_filter": true,
+      "trend_ma_bars": 200
+    },
+    "BBAS3.SA": {
+      "min_proba_threshold": 0.6,
+      "stop_loss_pct": 0.005,
+      "take_profit_pct": 0.012,
+      "time_stop_bars": 2,
+      "direction": "both",
+      "regime_filter": "all",
+      "use_trend_filter": true,
+      "trend_ma_bars": 200
+    }
+  },
+  "metrics": {
+    "per_ticker": {
+      "PRIO3.SA": {
+        "n_trades": 40,
+        "sharpe": 0.9632,
+        "sortino": 8.9633,
+        "max_dd_pct": 54.0,
+        "win_rate": 65.0,
+        "total_return_pct": 665.0,
+        "profit_factor": 4.3483,
+        "calmar": 0.7673
+      },
+      "LREN3.SA": {
+        "n_trades": 101,
+        "sharpe": 0.5991,
+        "sortino": 32.4415,
+        "max_dd_pct": 135.0,
+        "win_rate": 43.56,
+        "total_return_pct": 658.0,
+        "profit_factor": 1.8277,
+        "calmar": 0.1803
+      },
+      "SUZB3.SA": {
+        "n_trades": 20,
+        "sharpe": -0.0083,
+        "sortino": -0.1194,
+        "max_dd_pct": 41.0,
+        "win_rate": 40.0,
+        "total_return_pct": -2.0,
+        "profit_factor": 0.9873,
+        "calmar": -0.0058
+      },
+      "EQTL3.SA": {
+        "n_trades": 41,
+        "sharpe": 0.3506,
+        "sortino": 11.6708,
+        "max_dd_pct": 96.0,
+        "win_rate": 34.15,
+        "total_return_pct": 278.0,
+        "profit_factor": 1.744,
+        "calmar": 0.157
+      },
+      "ITUB4.SA": {
+        "n_trades": 124,
+        "sharpe": 0.252,
+        "sortino": 15.3945,
+        "max_dd_pct": 114.0,
+        "win_rate": 28.23,
+        "total_return_pct": 382.0,
+        "profit_factor": 1.3061,
+        "calmar": 0.1292
+      },
+      "VIVT3.SA": {
+        "n_trades": 101,
+        "sharpe": 0.5281,
+        "sortino": 11.4075,
+        "max_dd_pct": 65.0,
+        "win_rate": 43.56,
+        "total_return_pct": 655.0,
+        "profit_factor": 1.8091,
+        "calmar": 0.3699
+      },
+      "KLBN11.SA": {
+        "n_trades": 100,
+        "sharpe": 0.796,
+        "sortino": 46.7927,
+        "max_dd_pct": 101.0,
+        "win_rate": 44.0,
+        "total_return_pct": 677.0,
+        "profit_factor": 1.8548,
+        "calmar": 0.5242
+      },
+      "BBAS3.SA": {
+        "n_trades": 30,
+        "sharpe": -0.0088,
+        "sortino": -0.2007,
+        "max_dd_pct": 84.0,
+        "win_rate": 40.0,
+        "total_return_pct": -5.0,
+        "profit_factor": 0.9818,
+        "calmar": -0.002
+      }
+    },
+    "aggregate": {
+      "total_trades": 557,
+      "mean_sharpe": 0.434,
+      "mean_win_rate": 42.31,
+      "mean_return_pct": 413.5,
+      "mean_max_dd_pct": 86.25
+    }
+  },
+  "data_hash": "62e972d11678ca95",
+  "extra": {
+    "db_hash": "62e972d11678ca95",
+    "model_type": "lightgbm_specialized",
+    "wfv_mode": "rolling",
+    "train_months": 24,
+    "test_months": 6
+  }
+}

@@ -182,6 +182,9 @@ class ModelTrainer:
         # For standard mode
         self.pipeline: Optional[Pipeline] = None
 
+        # Post-hoc calibrators (set by .calibrate())
+        self._calibrators: Optional[dict] = None
+
         if model_type != "lightgbm_specialized":
             self._build_pipeline()
 
@@ -357,6 +360,7 @@ class ModelTrainer:
         """
         Return class probabilities as DataFrame with columns matching classes.
         For specialized: columns are {-1, 0, +1}.
+        If calibrated, applies the post-hoc calibrator.
         """
         self._check_fitted()
 
@@ -366,16 +370,39 @@ class ModelTrainer:
         X     = df[self.feature_cols].values
         proba = self.pipeline.predict_proba(X)
         classes = list(self.pipeline.named_steps["clf"].classes_)
-        # LightGBM 4.x always returns (N, 2) for binary problems even when
-        # only one class was seen during training (classes_ has 1 element).
-        # Fall back to integer column indices when lengths diverge.
         if len(classes) != proba.shape[1]:
             classes = list(range(proba.shape[1]))
-        return pd.DataFrame(proba, index=df.index, columns=classes)
+        result = pd.DataFrame(proba, index=df.index, columns=classes)
+
+        if hasattr(self, "_calibrators") and self._calibrators:
+            applied = False
+            for cls in result.columns:
+                cal = self._calibrators.get(cls)
+                if cal is not None:
+                    raw = result[cls].values
+                    if hasattr(cal, "predict"):
+                        result[cls] = cal.predict(raw)
+                    else:
+                        result[cls] = cal.predict_proba(raw.reshape(-1, 1))[:, 1]
+                    applied = True
+            if applied:
+                row_sums = result.sum(axis=1).replace(0, 1.0)
+                result = result.div(row_sums, axis=0)
+
+        return result
 
     def _predict_proba_specialized(self, df: pd.DataFrame) -> pd.DataFrame:
         long_p  = self._long_proba(df)
         short_p = self._short_proba(df)
+
+        if hasattr(self, "_calibrators") and self._calibrators:
+            cal_long = self._calibrators.get("long")
+            if cal_long is not None:
+                long_p = cal_long.predict(long_p) if hasattr(cal_long, "predict") else cal_long.predict_proba(long_p.reshape(-1, 1))[:, 1]
+            cal_short = self._calibrators.get("short")
+            if cal_short is not None:
+                short_p = cal_short.predict(short_p) if hasattr(cal_short, "predict") else cal_short.predict_proba(short_p.reshape(-1, 1))[:, 1]
+
         neutral = np.clip(1.0 - long_p - short_p, 0.0, 1.0)
         return pd.DataFrame(
             {-1: short_p, 0: neutral, 1: long_p},
@@ -428,6 +455,7 @@ class ModelTrainer:
             "pipeline":      self.pipeline,
             "_long_trainer": self._long_trainer,
             "_short_trainer":self._short_trainer,
+            "_calibrators":  getattr(self, "_calibrators", None),
         }
         joblib.dump(payload, path)
         logger.info("Model saved -> %s", path)
@@ -443,6 +471,7 @@ class ModelTrainer:
         trainer.pipeline       = data.get("pipeline")
         trainer._long_trainer  = data.get("_long_trainer")
         trainer._short_trainer = data.get("_short_trainer")
+        trainer._calibrators   = data.get("_calibrators")
         logger.info("Model loaded from -> %s", path)
         return trainer
 
@@ -564,6 +593,194 @@ class ModelTrainer:
 
         logger.info("Feature stability (top 10):\n%s", result.head(10).to_string())
         return result
+
+    # ------------------------------------------------------------------
+    # Minimum Brier improvement to keep a calibrator. Prevents keeping
+    # calibrators that "improved" by noise on small validation sets.
+    # 0.005 corresponds to ~2% relative improvement on a typical Brier of 0.25.
+    CALIBRATION_MIN_DELTA = 0.03
+
+    def calibrate(
+        self,
+        val_df: pd.DataFrame,
+        method: str = "isotonic",
+        min_delta: float = CALIBRATION_MIN_DELTA,
+    ) -> "ModelTrainer":
+        """
+        Fit a post-hoc probability calibrator on validation data.
+
+        Only keeps the calibrator for each class if it reduces the Brier
+        score by at least *min_delta* vs. the raw model. This prevents
+        harming tickers whose models are already well-calibrated.
+
+        Parameters
+        ----------
+        val_df    : validation DataFrame with feature columns + 'label'
+        method    : 'isotonic' (default, non-parametric) or 'sigmoid' (Platt)
+        min_delta : minimum Brier reduction to keep calibrator (default 0.005)
+
+        Returns self (for chaining).
+        """
+        from sklearn.isotonic import IsotonicRegression
+        from sklearn.linear_model import LogisticRegression as LR
+        from sklearn.metrics import brier_score_loss
+
+        self._check_fitted()
+
+        if self.model_type == "lightgbm_specialized":
+            return self._calibrate_specialized(val_df, method, min_delta)
+
+        n_folds = 3
+        fold_size = len(val_df) // n_folds
+        proba_full = self.predict_proba(val_df)
+        y_full = val_df["label"].values
+
+        self._calibrators = {}
+        for cls in proba_full.columns:
+            yb_full = (y_full == cls).astype(int)
+            p_full = proba_full[cls].values
+            deltas = []
+
+            for fold in range(n_folds):
+                es, ee = fold * fold_size, (fold + 1) * fold_size
+                fit_mask = np.ones(len(val_df), dtype=bool)
+                fit_mask[es:ee] = False
+                p_fit, yb_fit = p_full[fit_mask], yb_full[fit_mask]
+                p_eval, yb_eval = p_full[es:ee], yb_full[es:ee]
+                if len(p_eval) < 10:
+                    continue
+                brier_raw = brier_score_loss(yb_eval, p_eval)
+                if method == "isotonic":
+                    c = IsotonicRegression(y_min=0.0, y_max=1.0, out_of_bounds="clip")
+                    c.fit(p_fit, yb_fit)
+                    brier_cal = brier_score_loss(yb_eval, c.predict(p_eval))
+                else:
+                    c = LR()
+                    c.fit(p_fit.reshape(-1, 1), yb_fit)
+                    brier_cal = brier_score_loss(yb_eval, c.predict_proba(p_eval.reshape(-1, 1))[:, 1])
+                deltas.append(brier_raw - brier_cal)
+
+            avg_delta = float(np.mean(deltas)) if deltas else 0.0
+            if avg_delta >= min_delta:
+                if method == "isotonic":
+                    cal_final = IsotonicRegression(y_min=0.0, y_max=1.0, out_of_bounds="clip")
+                    cal_final.fit(p_full, yb_full)
+                else:
+                    cal_final = LR()
+                    cal_final.fit(p_full.reshape(-1, 1), yb_full)
+                self._calibrators[cls] = cal_final
+                logger.info("  class %s: calibrator KEPT (3-fold avg delta=%.4f)", cls, avg_delta)
+            else:
+                self._calibrators[cls] = None
+                logger.info("  class %s: calibrator DISCARDED (3-fold avg delta=%.4f < %.4f)", cls, avg_delta, min_delta)
+
+        kept = sum(1 for v in self._calibrators.values() if v is not None)
+        logger.info("Calibration: %d/%d calibrators kept.", kept, len(self._calibrators))
+        return self
+
+    def _calibrate_specialized(
+        self,
+        val_df: pd.DataFrame,
+        method: str,
+        min_delta: float = CALIBRATION_MIN_DELTA,
+    ) -> "ModelTrainer":
+        """Calibrate the long and short sub-models independently.
+
+        Uses 3-fold temporal cross-validation within val_df to estimate
+        whether calibration helps. Only keeps the calibrator if the
+        AVERAGE Brier improvement across all 3 folds >= min_delta. This
+        is more robust than a single held-out split against distribution
+        shift between calibration and future test periods.
+        """
+        from sklearn.isotonic import IsotonicRegression
+        from sklearn.linear_model import LogisticRegression as LR
+        from sklearn.metrics import brier_score_loss
+
+        n_folds = 3
+        fold_size = len(val_df) // n_folds
+
+        long_p_full  = self._long_proba(val_df)
+        short_p_full = self._short_proba(val_df)
+        y_full = val_df["label"].values
+
+        self._calibrators = {}
+        for key, p_full, cls_val in [("long", long_p_full, 1), ("short", short_p_full, -1)]:
+            yb_full = (y_full == cls_val).astype(int)
+            deltas = []
+
+            for fold in range(n_folds):
+                eval_start = fold * fold_size
+                eval_end   = eval_start + fold_size
+                fit_mask = np.ones(len(val_df), dtype=bool)
+                fit_mask[eval_start:eval_end] = False
+
+                p_fit  = p_full[fit_mask]
+                yb_fit = yb_full[fit_mask]
+                p_eval = p_full[eval_start:eval_end]
+                yb_eval = yb_full[eval_start:eval_end]
+
+                if len(p_eval) < 10 or len(p_fit) < 10:
+                    continue
+
+                brier_raw = brier_score_loss(yb_eval, p_eval)
+                if method == "isotonic":
+                    cal_fold = IsotonicRegression(y_min=0.0, y_max=1.0, out_of_bounds="clip")
+                    cal_fold.fit(p_fit, yb_fit)
+                    cal_p = cal_fold.predict(p_eval)
+                else:
+                    cal_fold = LR()
+                    cal_fold.fit(p_fit.reshape(-1, 1), yb_fit)
+                    cal_p = cal_fold.predict_proba(p_eval.reshape(-1, 1))[:, 1]
+                brier_cal = brier_score_loss(yb_eval, cal_p)
+                deltas.append(brier_raw - brier_cal)
+
+            avg_delta = float(np.mean(deltas)) if deltas else 0.0
+
+            if avg_delta >= min_delta:
+                if method == "isotonic":
+                    cal_final = IsotonicRegression(y_min=0.0, y_max=1.0, out_of_bounds="clip")
+                    cal_final.fit(p_full, yb_full)
+                else:
+                    cal_final = LR()
+                    cal_final.fit(p_full.reshape(-1, 1), yb_full)
+                self._calibrators[key] = cal_final
+                logger.info("  %s: calibrator KEPT (3-fold avg delta=%.4f, folds=%s)",
+                            key, avg_delta, [round(d, 4) for d in deltas])
+            else:
+                self._calibrators[key] = None
+                logger.info("  %s: calibrator DISCARDED (3-fold avg delta=%.4f < %.4f, folds=%s)",
+                            key, avg_delta, min_delta, [round(d, 4) for d in deltas])
+
+        kept = sum(1 for v in self._calibrators.values() if v is not None)
+        logger.info("Specialized calibration: %d/%d calibrators kept.", kept, len(self._calibrators))
+        return self
+
+    # ------------------------------------------------------------------
+    def brier_score(self, df: pd.DataFrame) -> dict:
+        """
+        Compute Brier score on a labeled DataFrame.
+
+        Lower is better. Perfect calibration = 0.
+        Returns dict with per-class and mean Brier scores.
+        """
+        from sklearn.metrics import brier_score_loss
+
+        self._check_fitted()
+        proba_df = self.predict_proba(df)
+        y_true = df["label"].values
+        scores = {}
+
+        for cls in proba_df.columns:
+            if cls == 0:
+                continue
+            y_bin = (y_true == cls).astype(int)
+            p = proba_df[cls].values
+            scores[f"brier_class_{cls}"] = round(brier_score_loss(y_bin, p), 6)
+
+        scores["brier_mean"] = round(
+            sum(v for v in scores.values()) / max(len(scores), 1), 6
+        )
+        return scores
 
     # ------------------------------------------------------------------
     def _check_fitted(self) -> None:

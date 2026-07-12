@@ -53,19 +53,18 @@ import pandas as pd
 from autotrader.config.settings import (
     BROKER_MODE,
     INITIAL_EQUITY,
-    MIN_PROBA_THRESHOLD,
     MT5_LOGIN,
     MT5_PASSWORD,
     MT5_SERVER,
     SIGNALS_PATH,
     SLIPPAGE_PCT,
-    STOP_LOSS_PCT,
-    TAKE_PROFIT_PCT,
     TICKERS,
 )
+from autotrader.config.ticker_config import load_ticker_params
 from autotrader.models.trainer import ModelTrainer
 from autotrader.risk.position import PositionManager
 from autotrader.risk.management import PositionSizer
+from autotrader.signals.core import should_trade, compute_sl_tp
 
 logger = logging.getLogger(__name__)
 
@@ -147,9 +146,19 @@ class ExecutionEngine:
         -------
         pd.DataFrame of actionable signals (non-neutral only)
         """
+        # Per-ticker params (falls back to globals when ticker not in JSON)
+        params = load_ticker_params(ticker)
+        sl_pct     = params["stop_loss_pct"]
+        trend_bars = params["trend_ma_bars"]
+
         # Align OHLCV with signals
         aligned = signals_df.join(ohlcv_df[["close", "high", "low", "volume"]], how="left")
         aligned = aligned.dropna(subset=["pred", "close"])
+
+        # Pre-compute trend MA on the full OHLCV series (same logic as BacktestEngine)
+        trend_ma = ohlcv_df["close"].rolling(
+            trend_bars, min_periods=trend_bars // 2
+        ).mean()
 
         rows = []
         for ts, row in aligned.iterrows():
@@ -157,27 +166,25 @@ class ExecutionEngine:
             if pred == 0:
                 continue
 
-            # Probability filter
             proba_col = f"proba_{pred}"
             proba = float(row.get(proba_col, 0.5))
-            if proba < MIN_PROBA_THRESHOLD:
+            entry_price = float(row["close"])
+            ma_val = trend_ma.loc[ts] if ts in trend_ma.index else float("nan")
+
+            if not should_trade(pred, proba, entry_price, ma_val, params):
                 continue
 
-            entry_price  = float(row["close"])
-            direction    = "BUY" if pred == 1 else "SELL"
+            direction = "BUY" if pred == 1 else "SELL"
 
             # Prices with slippage baked in
             slippage = entry_price * SLIPPAGE_PCT
             if pred == 1:
-                fill_est   = entry_price + slippage
-                stop_price = round(fill_est * (1 - STOP_LOSS_PCT),  4)
-                tp_price   = round(fill_est * (1 + TAKE_PROFIT_PCT), 4)
+                fill_est = entry_price + slippage
             else:
-                fill_est   = entry_price - slippage
-                stop_price = round(fill_est * (1 + STOP_LOSS_PCT),  4)
-                tp_price   = round(fill_est * (1 - TAKE_PROFIT_PCT), 4)
+                fill_est = entry_price - slippage
+            stop_price, tp_price = compute_sl_tp(fill_est, pred, sl_pct, params["take_profit_pct"])
 
-            shares   = self.sizer.shares(self.equity, fill_est, STOP_LOSS_PCT)
+            shares   = self.sizer.shares(self.equity, fill_est, sl_pct)
             notional = round(shares * fill_est, 2)
 
             rows.append({
@@ -232,6 +239,11 @@ class ExecutionEngine:
             logger.warning("live_scan: empty DataFrame received")
             return None
 
+        # Per-ticker params (falls back to globals when ticker not in JSON)
+        params = load_ticker_params(ticker)
+        sl_pct     = params["stop_loss_pct"]
+        trend_bars = params["trend_ma_bars"]
+
         row_df = latest_df.tail(1)
         proba_df = self.trainer.predict_proba(row_df)
         pred = int(self.trainer.predict(row_df)[0])
@@ -242,29 +254,32 @@ class ExecutionEngine:
 
         proba_col = pred
         proba = float(proba_df[proba_col].iloc[0]) if proba_col in proba_df.columns else 0.5
+        entry_price = float(row_df["close"].iloc[0])
 
-        if proba < MIN_PROBA_THRESHOLD:
+        # Compute MA for trend filter using only confirmed (D-1) closes.
+        # The last bar may be a partial intraday candle (scan runs mid-session),
+        # so exclude it from the MA to avoid look-ahead bias.
+        ma_val = float("nan")
+        if "close" in latest_df.columns and len(latest_df) > 1:
+            confirmed_close = latest_df["close"].iloc[:-1]
+            ma_series = confirmed_close.rolling(
+                trend_bars, min_periods=trend_bars // 2
+            ).mean()
+            ma_val = ma_series.iloc[-1] if len(ma_series) > 0 else float("nan")
+
+        if not should_trade(pred, proba, entry_price, ma_val, params):
             logger.info(
-                "live_scan [%s]: signal %+d filtered (proba=%.3f < %.3f)",
-                ticker, pred, proba, MIN_PROBA_THRESHOLD,
+                "live_scan [%s]: signal %+d filtered (proba=%.3f, price=%.2f)",
+                ticker, pred, proba, entry_price,
             )
             return None
 
-        # Assume entry at current close
-        entry_price = float(row_df["close"].iloc[0])
-        slippage    = entry_price * SLIPPAGE_PCT
-        direction   = "BUY" if pred == 1 else "SELL"
+        slippage  = entry_price * SLIPPAGE_PCT
+        direction = "BUY" if pred == 1 else "SELL"
+        fill_est  = entry_price + slippage if pred == 1 else entry_price - slippage
+        stop_price, tp_price = compute_sl_tp(fill_est, pred, sl_pct, params["take_profit_pct"])
 
-        if pred == 1:
-            fill_est   = entry_price + slippage
-            stop_price = round(fill_est * (1 - STOP_LOSS_PCT),  4)
-            tp_price   = round(fill_est * (1 + TAKE_PROFIT_PCT), 4)
-        else:
-            fill_est   = entry_price - slippage
-            stop_price = round(fill_est * (1 + STOP_LOSS_PCT),  4)
-            tp_price   = round(fill_est * (1 - TAKE_PROFIT_PCT), 4)
-
-        shares   = self.sizer.shares(self.equity, fill_est, STOP_LOSS_PCT)
+        shares   = self.sizer.shares(self.equity, fill_est, sl_pct)
         notional = round(shares * fill_est, 2)
 
         signal = {

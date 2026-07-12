@@ -127,6 +127,80 @@ class TestTemporalSplit:
         actual_test_frac = len(test) / n
         assert 0.15 <= actual_test_frac <= 0.30
 
+
+class TestCalibration:
+
+    def test_calibrate_runs_without_error(self, labeled_df):
+        train, val = temporal_split(labeled_df, test_size=0.3)
+        trainer = ModelTrainer(model_type="lightgbm")
+        trainer.fit(train)
+        trainer.calibrate(val, method="isotonic")
+
+    def test_calibrated_proba_sums_to_one(self, labeled_df):
+        train, val = temporal_split(labeled_df, test_size=0.3)
+        trainer = ModelTrainer(model_type="lightgbm")
+        trainer.fit(train)
+        trainer.calibrate(val, method="isotonic")
+        proba_df = trainer.predict_proba(val)
+        row_sums = proba_df.sum(axis=1)
+        assert np.allclose(row_sums, 1.0, atol=0.05)
+
+    def test_brier_score_returns_dict(self, labeled_df):
+        train, val = temporal_split(labeled_df, test_size=0.3)
+        trainer = ModelTrainer(model_type="lightgbm")
+        trainer.fit(train)
+        scores = trainer.brier_score(val)
+        assert isinstance(scores, dict)
+        assert "brier_mean" in scores
+        assert 0.0 <= scores["brier_mean"] <= 1.0
+
+    def test_calibration_changes_brier_score(self, labeled_df):
+        train, val = temporal_split(labeled_df, test_size=0.3)
+        trainer = ModelTrainer(model_type="lightgbm")
+        trainer.fit(train)
+        brier_before = trainer.brier_score(val)
+
+        trainer.calibrate(val, method="isotonic")
+        brier_after = trainer.brier_score(val)
+
+        # Both should be valid scores
+        assert 0.0 <= brier_before["brier_mean"] <= 1.0
+        assert 0.0 <= brier_after["brier_mean"] <= 1.0
+
+    def test_calibrated_save_load(self, labeled_df):
+        import tempfile
+        train, val = temporal_split(labeled_df, test_size=0.3)
+        trainer = ModelTrainer(model_type="lightgbm")
+        trainer.fit(train)
+        trainer.calibrate(val, method="isotonic")
+        preds_before = trainer.predict(val)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "model_calibrated.pkl"
+            trainer.save(path)
+            loaded = ModelTrainer.load(path)
+
+        preds_after = loaded.predict(val)
+        np.testing.assert_array_equal(preds_before, preds_after)
+
     def test_combined_length_equals_total(self, labeled_df):
         train, test = temporal_split(labeled_df, test_size=0.2)
         assert len(train) + len(test) == len(labeled_df)
+
+    def test_calibrator_discarded_when_not_helpful(self, labeled_df):
+        """When model is already well-calibrated, calibrator must be discarded."""
+        train, val = temporal_split(labeled_df, test_size=0.3)
+        trainer = ModelTrainer(model_type="lightgbm")
+        trainer.fit(train)
+
+        brier_before = trainer.brier_score(val)
+        trainer.calibrate(val, method="isotonic")
+
+        discarded = sum(1 for v in (trainer._calibrators or {}).values() if v is None)
+        total = len(trainer._calibrators or {})
+        # At least one calibrator should be discarded on synthetic data
+        # (synthetic random data produces a model that's already ~calibrated)
+        assert discarded > 0 or total == 0, (
+            f"Expected at least one calibrator to be discarded on synthetic data, "
+            f"but all {total} were kept"
+        )

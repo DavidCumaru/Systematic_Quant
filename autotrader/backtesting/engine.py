@@ -44,21 +44,17 @@ from autotrader.config.settings import (
     EXECUTION_DELAY_BARS,
     INITIAL_EQUITY,
     KELLY_WARMUP,
-    MIN_PROBA_THRESHOLD,
     REGIME_VOL_THRESHOLD,
     REGIME_VOL_WINDOW,
     SLIPPAGE_PCT,
     SPREAD_PCT,
-    STOP_LOSS_PCT,
-    TAKE_PROFIT_PCT,
-    TIME_STOP_BARS,
-    TREND_MA_BARS,
     USE_KELLY,
     USE_SESSION_FILTER,
-    USE_TREND_FILTER,
 )
+from autotrader.config.ticker_config import load_ticker_params
 from autotrader.risk.management import PositionSizer, RiskGuard
 from autotrader.risk.market_impact import MarketImpactModel
+from autotrader.signals.core import check_trend_filter, compute_sl_tp
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +118,7 @@ class BacktestEngine:
         impact_model: Optional[MarketImpactModel] = None,
         params: Optional[dict] = None,
         regimes: Optional[pd.Series] = None,
+        ticker: str = "",
     ):
         self.df      = df.sort_index()
         self.signals = signals.sort_index()
@@ -132,13 +129,17 @@ class BacktestEngine:
         self.equity_curve: pd.Series = pd.Series(dtype=float)
 
         # ── Per-ticker parameter overrides ───────────────────────────────────
-        p = params or {}
-        self._min_proba    = float(p.get("min_proba_threshold", MIN_PROBA_THRESHOLD))
-        self._sl_pct       = float(p.get("stop_loss_pct",       STOP_LOSS_PCT))
-        self._tp_pct       = float(p.get("take_profit_pct",     TAKE_PROFIT_PCT))
-        self._time_stop    = int(p.get("time_stop_bars",        TIME_STOP_BARS))
-        self._use_trend    = bool(p.get("use_trend_filter",     USE_TREND_FILTER))
-        self._trend_bars   = int(p.get("trend_ma_bars",         TREND_MA_BARS))
+        # Priority: explicit params > ticker_config > global defaults
+        if params is not None:
+            p = params
+        else:
+            p = load_ticker_params(ticker)
+        self._min_proba    = float(p.get("min_proba_threshold", 0.58))
+        self._sl_pct       = float(p.get("stop_loss_pct",       0.01))
+        self._tp_pct       = float(p.get("take_profit_pct",     0.03))
+        self._time_stop    = int(p.get("time_stop_bars",        3))
+        self._use_trend    = bool(p.get("use_trend_filter",     True))
+        self._trend_bars   = int(p.get("trend_ma_bars",         200))
         self._direction    = str(p.get("direction",             "both"))
         self._regime_filt  = str(p.get("regime_filter",        "all"))
 
@@ -260,22 +261,16 @@ class BacktestEngine:
                     if regime_label not in allowed:
                         continue
 
-            # Trend filter: only long above MA, only short below MA.
-            # Eliminates the primary source of losses: fighting the dominant trend.
-            if self._use_trend:
-                ma_val = self._trend_ma.iloc[i]
-                price  = bars["close"].iloc[i]
-                if signal == 1  and price < ma_val:   # long in downtrend
-                    continue
-                if signal == -1 and price > ma_val:   # short in uptrend
-                    continue
+            # Trend filter + probability filter (shared logic with ExecutionEngine)
+            ma_val = self._trend_ma.iloc[i]
+            price  = bars["close"].iloc[i]
+            if not check_trend_filter(price, signal, ma_val, self._use_trend):
+                continue
 
-            # Probability filter
             proba_col = f"proba_{signal}"
-            if proba_col in sig_row.index:
-                proba = float(sig_row[proba_col])
-                if proba < self._min_proba:
-                    continue
+            proba = float(sig_row[proba_col]) if proba_col in sig_row.index else 0.5
+            if proba < self._min_proba:
+                continue
 
             # Entry bar (delayed)
             entry_bar_idx = i + EXECUTION_DELAY_BARS
@@ -388,8 +383,7 @@ class BacktestEngine:
         Walk forward bar by bar to find the first barrier touched.
         Uses bar high/low to check TP and SL intrabar.
         """
-        tp_price = entry_price * (1 + direction * self._tp_pct)
-        sl_price = entry_price * (1 - direction * self._sl_pct)
+        sl_price, tp_price = compute_sl_tp(entry_price, direction, self._sl_pct, self._tp_pct)
         n        = len(bars)
         idx      = bars.index
 

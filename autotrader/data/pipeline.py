@@ -126,12 +126,26 @@ def _download_ticker(ticker: str, period: str, interval: str) -> pd.DataFrame:
 # Persistence
 # ---------------------------------------------------------------------------
 
+ANOMALY_THRESHOLD_PCT = 0.03   # 3% — flag price changes above this
+ANOMALY_MIN_AGE_DAYS = 7      # only flag bars older than this
+
+ANOMALY_LOG = DATA_DIR / "price_anomalies.csv"
+
+
 def _upsert_bars(
-    conn: sqlite3.Connection, ticker: str, df: pd.DataFrame, interval: str = "1d"
+    conn: sqlite3.Connection, ticker: str, df: pd.DataFrame, interval: str = "1d",
+    corporate_actions: Optional[pd.DataFrame] = None,
 ) -> int:
     """
-    Insert new bars into SQLite, ignoring duplicates (UPSERT on PK).
-    Returns the number of new rows inserted.
+    Insert or update bars in SQLite.
+
+    Uses INSERT OR REPLACE so that retroactive price adjustments
+    (dividends, splits) propagate to bars already stored.
+
+    For bars older than ANOMALY_MIN_AGE_DAYS, if the new close differs
+    from the stored close by more than ANOMALY_THRESHOLD_PCT and no
+    corporate action exists near that date, the bar is flagged as an
+    anomaly and skipped (not overwritten).
     """
     if df.empty:
         return 0
@@ -139,14 +153,59 @@ def _upsert_bars(
     table = _table_name(ticker, interval)
     _ensure_table(conn, ticker, interval)
 
-    records = [
-        (str(ts), row.open, row.high, row.low, row.close, row.volume)
-        for ts, row in df.iterrows()
-    ]
+    cutoff = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=ANOMALY_MIN_AGE_DAYS)
+
+    existing = {}
+    try:
+        rows = conn.execute(f'SELECT datetime, close FROM "{table}"').fetchall()
+        existing = {r[0]: r[1] for r in rows}
+    except Exception:
+        pass
+
+    ca_dates = set()
+    if corporate_actions is not None and not corporate_actions.empty:
+        for dt in corporate_actions.index:
+            d = dt.date() if hasattr(dt, "date") else pd.Timestamp(dt).date()
+            for offset in range(-3, 4):
+                ca_dates.add(d + pd.Timedelta(days=offset))
+
+    records = []
+    anomalies = []
+    for ts, row in df.iterrows():
+        dt_str = str(ts)
+        new_close = row.close
+
+        if dt_str in existing and ts < cutoff:
+            old_close = existing[dt_str]
+            if old_close > 0:
+                pct_diff = abs(new_close - old_close) / old_close
+                if pct_diff > ANOMALY_THRESHOLD_PCT:
+                    bar_date = ts.date() if hasattr(ts, "date") else pd.Timestamp(ts).date()
+                    if bar_date not in ca_dates:
+                        anomalies.append({
+                            "ticker": ticker,
+                            "datetime": dt_str,
+                            "old_close": round(old_close, 4),
+                            "new_close": round(new_close, 4),
+                            "pct_diff": round(pct_diff * 100, 2),
+                        })
+                        continue
+
+        records.append((dt_str, row.open, row.high, row.low, row.close, row.volume))
+
+    if anomalies:
+        _log_anomalies(anomalies)
+        logger.warning(
+            "%s: %d bars skipped (price anomaly >%.0f%% without corporate action)",
+            ticker, len(anomalies), ANOMALY_THRESHOLD_PCT * 100,
+        )
+
+    if not records:
+        return 0
 
     cursor = conn.executemany(
         f"""
-        INSERT OR IGNORE INTO "{table}"
+        INSERT OR REPLACE INTO "{table}"
             (datetime, open, high, low, close, volume)
         VALUES (?, ?, ?, ?, ?, ?)
         """,
@@ -154,6 +213,17 @@ def _upsert_bars(
     )
     conn.commit()
     return cursor.rowcount
+
+
+def _log_anomalies(anomalies: list[dict]) -> None:
+    """Append anomalies to the CSV log file."""
+    import csv
+    file_exists = ANOMALY_LOG.exists()
+    with open(ANOMALY_LOG, "a", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=["ticker", "datetime", "old_close", "new_close", "pct_diff"])
+        if not file_exists:
+            writer.writeheader()
+        writer.writerows(anomalies)
 
 
 # ---------------------------------------------------------------------------
@@ -188,19 +258,21 @@ def update_data(
     try:
         for ticker in tickers:
             _ensure_table(conn, ticker, interval)
-            last_dt = _last_stored_dt(conn, ticker, interval)
 
             df = _download_ticker(ticker, period=effective_period, interval=interval)
             if df.empty:
                 continue
 
-            # Incremental filter
-            if last_dt is not None:
-                df = df[df.index > last_dt]
+            # Fetch corporate actions for anomaly detection
+            ca = None
+            try:
+                ca = yf.Ticker(ticker).actions
+            except Exception:
+                pass
 
-            n = _upsert_bars(conn, ticker, df, interval)
+            n = _upsert_bars(conn, ticker, df, interval, corporate_actions=ca)
             logger.info(
-                "%s [%s] -> %d new bars stored (last=%s)",
+                "%s [%s] -> %d bars upserted (last=%s)",
                 ticker, interval, n, df.index[-1] if not df.empty else "N/A",
             )
     finally:

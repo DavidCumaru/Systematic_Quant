@@ -20,7 +20,7 @@
     "trend_ma_bars": 200
   },
   "BBAS3.SA": {
-    "min_proba_threshold": 0.56,
+    "min_proba_threshold": 0.6,
     "stop_loss_pct": 0.005,
     "take_profit_pct": 0.012,
     "time_stop_bars": 2,
@@ -90,9 +90,9 @@
     "trend_ma_bars": 200
   },
   "KLBN11.SA": {
-    "min_proba_threshold": 0.52,
+    "min_proba_threshold": 0.48,
     "stop_loss_pct": 0.005,
-    "take_profit_pct": 0.012,
+    "take_profit_pct": 0.018,
     "time_stop_bars": 2,
     "direction": "both",
     "regime_filter": "all",
@@ -131,6 +131,56 @@
   },
   "WEGE3.SA": {
     "min_proba_threshold": 0.6,
+    "stop_loss_pct": 0.005,
+    "take_profit_pct": 0.018,
+    "time_stop_bars": 5,
+    "direction": "both",
+    "regime_filter": "all",
+    "use_trend_filter": true,
+    "trend_ma_bars": 200
+  },
+  "LREN3.SA": {
+    "min_proba_threshold": 0.48,
+    "stop_loss_pct": 0.005,
+    "take_profit_pct": 0.018,
+    "time_stop_bars": 2,
+    "direction": "both",
+    "regime_filter": "all",
+    "use_trend_filter": true,
+    "trend_ma_bars": 200
+  },
+  "SUZB3.SA": {
+    "min_proba_threshold": 0.48,
+    "stop_loss_pct": 0.005,
+    "take_profit_pct": 0.012,
+    "time_stop_bars": 2,
+    "direction": "both",
+    "regime_filter": "all",
+    "use_trend_filter": true,
+    "trend_ma_bars": 200
+  },
+  "EQTL3.SA": {
+    "min_proba_threshold": 0.6,
+    "stop_loss_pct": 0.005,
+    "take_profit_pct": 0.025,
+    "time_stop_bars": 2,
+    "direction": "both",
+    "regime_filter": "all",
+    "use_trend_filter": true,
+    "trend_ma_bars": 200
+  },
+  "ITUB4.SA": {
+    "min_proba_threshold": 0.48,
+    "stop_loss_pct": 0.005,
+    "take_profit_pct": 0.025,
+    "time_stop_bars": 2,
+    "direction": "both",
+    "regime_filter": "all",
+    "use_trend_filter": true,
+    "trend_ma_bars": 200
+  },
+  "VIVT3.SA": {
+    "min_proba_threshold": 0.48,
     "stop_loss_pct": 0.005,
     "take_profit_pct": 0.018,
     "time_stop_bars": 5,

@@ -30,21 +30,26 @@ from autotrader.backtesting.engine import BacktestEngine
 
 
 # Fixtures
-def _make_synthetic_ohlcv(n: int = 500, seed: int = 42) -> pd.DataFrame:
-    """Create synthetic 1h OHLCV data with a tz-aware DatetimeIndex."""
+def _make_synthetic_ohlcv(n: int = 600, seed: int = 42) -> pd.DataFrame:
+    """Create synthetic DAILY OHLCV data with a tz-aware DatetimeIndex.
+
+    Uses daily bars (business days) with n=600 to ensure enough warm-up
+    for MA200, MTF features, and triple-barrier labeling.
+    """
     rng = np.random.default_rng(seed)
 
-    idx = pd.date_range(
-        start="2024-01-02 09:30",
+    idx = pd.bdate_range(
+        start="2020-01-02",
         periods=n,
-        freq="1h",
         tz="America/New_York",
     )
     close = 100 + np.cumsum(rng.normal(0, 0.5, n))
-    high = close + rng.uniform(0.1, 1.0, n)
-    low = close - rng.uniform(0.1, 1.0, n)
+    close = np.maximum(close, 1.0)
+    high = close + rng.uniform(0.1, 1.5, n)
+    low = close - rng.uniform(0.1, 1.5, n)
+    low = np.maximum(low, 0.5)
     open_ = close + rng.normal(0, 0.3, n)
-    volume = rng.integers(100_000, 1_000_000, n).astype(float)
+    volume = rng.integers(500_000, 5_000_000, n).astype(float)
 
     return pd.DataFrame(
         {"open": open_, "high": high, "low": low, "close": close, "volume": volume},
@@ -54,7 +59,7 @@ def _make_synthetic_ohlcv(n: int = 500, seed: int = 42) -> pd.DataFrame:
 
 @pytest.fixture
 def raw_df():
-    return _make_synthetic_ohlcv(500)
+    return _make_synthetic_ohlcv(600)
 
 
 @pytest.fixture

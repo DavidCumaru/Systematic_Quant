@@ -26,7 +26,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import data_pipeline as dp
+import autotrader.data.pipeline as dp
 
 
 # Fixture: patch DB_PATH to an isolated temp file for each test
@@ -80,13 +80,51 @@ class TestUpsertBars:
         conn.close()
         assert n == 10
 
-    def test_ignores_duplicates(self, tmp_db):
+    def test_replace_updates_existing_bars(self, tmp_db):
+        """INSERT OR REPLACE must overwrite existing bars when corporate action exists."""
         conn = sqlite3.connect(tmp_db)
         bars = _make_bars(10)
         dp._upsert_bars(conn, "SPY", bars)
-        n2 = dp._upsert_bars(conn, "SPY", bars)  # same data again
+
+        # Simulate a retroactive price adjustment (dividend/split)
+        adjusted = bars.copy()
+        adjusted["close"] = bars["close"] * 0.95  # 5% adjustment
+        adjusted["open"]  = bars["open"]  * 0.95
+
+        # Create a matching corporate action so the guard allows the replace
+        ca = pd.DataFrame(
+            {"Dividends": [0.5], "Stock Splits": [0.0]},
+            index=pd.DatetimeIndex([bars.index[0]]),
+        )
+        dp._upsert_bars(conn, "SPY", adjusted, corporate_actions=ca)
+
+        stored = pd.read_sql_query('SELECT close FROM "SPY" ORDER BY datetime LIMIT 1', conn)
+        expected = adjusted["close"].iloc[0]
+        actual = stored["close"].iloc[0]
         conn.close()
-        assert n2 == 0  # INSERT OR IGNORE -> 0 new rows
+        assert abs(actual - expected) < 0.01, (
+            f"Stored close {actual:.4f} should match adjusted {expected:.4f}, "
+            f"not original {bars['close'].iloc[0]:.4f}"
+        )
+
+    def test_anomaly_guard_blocks_suspicious_replace(self, tmp_db):
+        """Price revision >3% without corporate action must be skipped, not replaced."""
+        conn = sqlite3.connect(tmp_db)
+        bars = _make_bars(5)
+        dp._upsert_bars(conn, "TEST", bars)
+
+        stored_before = pd.read_sql_query('SELECT close FROM "TEST" ORDER BY datetime LIMIT 1', conn)
+        original_close = stored_before["close"].iloc[0]
+
+        # Attempt to overwrite with a 25% different close (no corporate action)
+        anomalous = bars.copy()
+        anomalous["close"] = bars["close"] * 0.75
+        dp._upsert_bars(conn, "TEST", anomalous, corporate_actions=pd.DataFrame())
+
+        stored_after = pd.read_sql_query('SELECT close FROM "TEST" ORDER BY datetime LIMIT 1', conn)
+        assert abs(stored_after["close"].iloc[0] - original_close) < 0.01, (
+            "Anomalous price revision without corporate action should be blocked"
+        )
 
     def test_empty_df_returns_zero(self, tmp_db):
         conn = sqlite3.connect(tmp_db)

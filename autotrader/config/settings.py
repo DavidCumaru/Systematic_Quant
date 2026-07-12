@@ -132,8 +132,8 @@ TREND_MA_BARS    = 200          # MA200 diaria — filtro de tendencia classico
 # ---------------------------------------------------------------------------
 # Labeling (Triple-Barrier)
 # ---------------------------------------------------------------------------
-# R:R fixo 3:1 — melhor configuracao validada em backtest honesto Jan-Dez/2025
-# Opcao C (Fix 3%/1% TIME=3): +54.50% retorno, 6.1% MaxDD, 284 trades
+# Barreiras globais (fallback). Params por ticker via ticker_params.json.
+# Backtest auditavel: data/backtest_artifacts/backtest_PRIO3_LREN3_SUZB3_EQTL3_+4_20260628_213847.json
 USE_ATR_BARRIERS    = False
 ATR_BARRIER_MULT_TP = 2.0        # nao usado (USE_ATR_BARRIERS=False)
 ATR_BARRIER_MULT_SL = 1.0        # nao usado (USE_ATR_BARRIERS=False)

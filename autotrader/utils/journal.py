@@ -29,7 +29,10 @@ FIELDNAMES = [
     "entry", "sl", "tp", "shares", "capital",
     "confidence", "status",
     "exit_price", "exit_reason", "pnl", "pnl_pct", "closed_date",
+    "strategy_version",
 ]
+
+STRATEGY_VERSION = "v2_trend_filter_ticker_params"
 
 
 def _ensure_journal():
@@ -43,22 +46,23 @@ def journal_add_signal(signal: dict, capital: float) -> None:
     """Registra um novo sinal no journal."""
     _ensure_journal()
     row = {
-        "signal_id":   signal.get("signal_id", ""),
-        "date":        date.today().isoformat(),
-        "ticker":      signal.get("ticker", ""),
-        "direction":   signal.get("direction", ""),
-        "entry":       round(float(signal.get("entry_price", 0)), 4),
-        "sl":          round(float(signal.get("stop_loss", 0)), 4),
-        "tp":          round(float(signal.get("take_profit", 0)), 4),
-        "shares":      int(signal.get("position_size", 0)),
-        "capital":     round(capital, 2),
-        "confidence":  round(float(signal.get("confidence", 0)), 4),
-        "status":      "open",
-        "exit_price":  "",
-        "exit_reason": "",
-        "pnl":         "",
-        "pnl_pct":     "",
-        "closed_date": "",
+        "signal_id":        signal.get("signal_id", ""),
+        "date":             date.today().isoformat(),
+        "ticker":           signal.get("ticker", ""),
+        "direction":        signal.get("direction", ""),
+        "entry":            round(float(signal.get("entry_price", 0)), 4),
+        "sl":               round(float(signal.get("stop_loss", 0)), 4),
+        "tp":               round(float(signal.get("take_profit", 0)), 4),
+        "shares":           int(signal.get("position_size", 0)),
+        "capital":          round(capital, 2),
+        "confidence":       round(float(signal.get("confidence", 0)), 4),
+        "status":           "open",
+        "exit_price":       "",
+        "exit_reason":      "",
+        "pnl":              "",
+        "pnl_pct":          "",
+        "closed_date":      "",
+        "strategy_version": STRATEGY_VERSION,
     }
     with open(JOURNAL_PATH, "a", newline="", encoding="utf-8") as f:
         csv.DictWriter(f, fieldnames=FIELDNAMES).writerow(row)
@@ -80,16 +84,13 @@ def journal_open_tickers() -> set:
 def journal_weekly_close(capital: float, time_stop_bars: int = 3) -> dict:
     """
     Verifica sinais abertos com mais de time_stop_bars dias uteis.
-    Busca precos via yfinance e calcula resultado (TP/SL/TIME).
+    Busca precos do DB (mesma fonte do scan de entrada, auto_adjust=True)
+    e calcula resultado (TP/SL/TIME).
     Retorna dict com resumo da semana.
     """
     _ensure_journal()
 
-    try:
-        import yfinance as yf
-    except ImportError:
-        logger.error("yfinance nao instalado")
-        return {}
+    from autotrader.data.pipeline import load_data
 
     try:
         df = pd.read_csv(JOURNAL_PATH)
@@ -100,7 +101,7 @@ def journal_weekly_close(capital: float, time_stop_bars: int = 3) -> dict:
         return {"trades": 0, "message": "Nenhum trade registrado ainda."}
 
     today      = date.today()
-    cutoff     = today - timedelta(days=time_stop_bars + 2)  # +2 para dias nao uteis
+    cutoff     = today - timedelta(days=time_stop_bars + 2)
     open_mask  = (df["status"] == "open") & (pd.to_datetime(df["date"]).dt.date <= cutoff)
     to_close   = df[open_mask].copy()
 
@@ -116,20 +117,11 @@ def journal_weekly_close(capital: float, time_stop_bars: int = 3) -> dict:
         sig_date  = row["date"]
 
         try:
-            # Busca historico desde a data do sinal
-            hist = yf.download(ticker, start=sig_date, period="10d",
-                               interval="1d", progress=False, auto_adjust=True)
-            if hist.empty:
+            raw = load_data(ticker, start=sig_date)
+            if raw.empty:
                 continue
 
-            # Remove multiindex se necessario
-            if isinstance(hist.columns, pd.MultiIndex):
-                hist.columns = [c[0].lower() for c in hist.columns]
-            else:
-                hist.columns = [c.lower() for c in hist.columns]
-
-            # Pula o primeiro dia (barra de entrada)
-            hist = hist.iloc[1:]
+            hist = raw.iloc[1:]
             if hist.empty:
                 continue
 
@@ -160,7 +152,6 @@ def journal_weekly_close(capital: float, time_stop_bars: int = 3) -> dict:
                         exit_reason = "TP"
                         break
             else:
-                # TIME STOP: usa o ultimo fechamento disponivel
                 exit_price = float(hist["close"].iloc[-1])
 
             if exit_price is None:

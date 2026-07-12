@@ -62,7 +62,7 @@ class TestFeatureColumns:
         "gk_vol",
         "amihud",
         "vix",
-        "beta_spy",
+        "beta_ibov",
         "days_to_earnings",
         "ma200_dist",
         "hi52w_prox",
@@ -188,5 +188,5 @@ class TestDefaultValues:
     def test_build_features_without_spy_and_vix(self, raw_df):
         df = build_features(raw_df, spy_df=None, vix_df=None, ticker="")
         assert not df.empty
-        assert "beta_spy" in df.columns
+        assert "beta_ibov" in df.columns
         assert "vix" in df.columns
