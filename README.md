@@ -50,20 +50,24 @@ O sistema envia alertas automáticos para o Telegram em tempo real:
 > Capital: R$ 8.000. Custos: 5 bps slippage + R$ 1 comissão + 2 bps spread por trade.
 > Walk-forward: 24 meses treino / 6 meses teste, janela rolling.
 
-### Tickers Ao Vivo (Holdout — melhores 8 do backteste honesto)
+### Tickers Ao Vivo (Walk-Forward Out-of-Sample, 2000–2026)
 
-| Ticker | Empresa | Retorno Total | Sharpe | Max DD | Taxa Acerto | Trades |
-|--------|---------|--------------|--------|--------|-------------|--------|
-| PRIO3.SA | PetroRio | — | — | — | — | — |
-| LREN3.SA | Lojas Renner | — | — | — | — | — |
-| SUZB3.SA | Suzano | — | — | — | — | — |
-| EQTL3.SA | Equatorial | — | — | — | — | — |
-| ITUB4.SA | Itaú Unibanco | — | — | — | — | — |
-| VIVT3.SA | Telefônica | — | — | — | — | — |
-| KLBN11.SA | Klabin | — | — | — | — | — |
-| BBAS3.SA | Banco do Brasil | — | — | — | — | — |
+> Artefato auditável: `data/backtest_artifacts/backtest_PRIO3_LREN3_SUZB3_EQTL3_+4_20260628_213847.json`
+> Seed: 42 · Git: `371f26cd` · DB hash: `62e972d1`
 
-> Preencha os resultados após rodar `python main.py --mode research --tickers PRIO3.SA ...`
+| Ticker | Empresa | Retorno Total¹ | Sharpe | Max DD | Taxa Acerto | Trades | PF |
+|--------|---------|---------------|--------|--------|-------------|--------|----|
+| PRIO3.SA | PetroRio | +665% | **0,96** | 54% | 65,0% | 40 | 4,35 |
+| KLBN11.SA | Klabin | +677% | **0,80** | 101% | 44,0% | 100 | 1,85 |
+| LREN3.SA | Lojas Renner | +658% | 0,60 | 135% | 43,6% | 101 | 1,83 |
+| VIVT3.SA | Telefônica | +655% | 0,53 | 65% | 43,6% | 101 | 1,81 |
+| EQTL3.SA | Equatorial | +278% | 0,35 | 96% | 34,2% | 41 | 1,74 |
+| ITUB4.SA | Itaú Unibanco | +382% | 0,25 | 114% | 28,2% | 124 | 1,31 |
+| SUZB3.SA | Suzano | −2% | −0,01 | 41% | 40,0% | 20 | 0,99 |
+| BBAS3.SA | Banco do Brasil | −5% | −0,01 | 84% | 40,0% | 30 | 0,98 |
+| **Agregado** | | **+414%** | **0,43** | **86%** | **42,3%** | **557** | — |
+
+¹ Retorno nominal acumulado ao longo de todo o período walk-forward (vários anos), não anualizado. MaxDD >100% indica que com compounding a equity curve ficou negativa em algum ponto — na prática o kill-switch de 10% DD interromperia a operação antes. SUZB3 e BBAS3 não apresentam edge detectável.
 
 ---
 
@@ -76,7 +80,7 @@ AutoTraderAI/
 │   │   ├── settings.py           # Todos os parâmetros (paths, tickers, risco)
 │   │   └── ticker_config.py      # Parâmetros por ticker (JSON)
 │   ├── data/
-│   │   ├── pipeline.py           # yfinance -> SQLite (incremental)
+│   │   ├── pipeline.py           # yfinance -> SQLite (full upsert + guard de anomalia >3%)
 │   │   ├── alternative.py        # Google Trends, dados macro
 │   │   └── news.py               # CVM filings, sentimento de notícias
 │   ├── features/
@@ -100,9 +104,12 @@ AutoTraderAI/
 │   │   ├── portfolio.py          # Alocação multi-ticker
 │   │   ├── position.py           # Rastreamento de posições
 │   │   └── market_impact.py      # Modelo Almgren-Chriss (raiz quadrada)
+│   ├── signals/
+│   │   └── core.py               # check_trend_filter, compute_sl_tp, should_trade (compartilhado)
 │   ├── analysis/
 │   │   ├── performance.py        # Métricas institucionais + curva de equity
-│   │   └── factors.py            # IC, ICIR, signal decay, atribuição de fatores
+│   │   ├── factors.py            # IC, ICIR, signal decay, atribuição de fatores
+│   │   └── artifact.py           # Artefato JSON auditável (git hash, seed, DB hash, métricas)
 │   └── utils/
 │       ├── logging.py            # setup_logging() centralizado
 │       ├── notifier.py           # Alertas Telegram
@@ -110,7 +117,7 @@ AutoTraderAI/
 ├── scripts/
 │   ├── grid_search.py            # Grid search exaustivo (2.688 combos/ticker)
 │   └── optimize_rr.py            # Otimização de risco/retorno TP/SL/TIME
-├── tests/                        # 11 módulos pytest (~60 classes de teste)
+├── tests/                        # 11 módulos pytest (160 testes, 0 falhas)
 ├── .github/workflows/
 │   ├── daily_scan.yml            # Scan diário B3 (10:10 BRT, seg-sex)
 │   └── weekly_retrain.yml        # Retreinamento semanal (sáb 07:00 BRT)
@@ -149,18 +156,47 @@ source venv/bin/activate        # Linux/macOS
 pip install -r requirements.txt
 ```
 
-### Configurar Telegram (opcional)
+### Configuração
+
+Copie o template e edite conforme necessário:
 
 ```bash
-# Copiar template de variáveis de ambiente
 cp .env.example .env
-
-# Editar .env e preencher:
-# TELEGRAM_TOKEN=123456:ABC-DEF...
-# TELEGRAM_CHAT_ID=987654321
 ```
 
-Sem Telegram configurado, o sistema opera em modo silencioso (apenas logs locais).
+#### Variáveis de ambiente (`.env`)
+
+| Variável | Obrigatório? | Descrição |
+|---|---|---|
+| `INITIAL_EQUITY` | **Sim** | Capital inicial em R$ (ex: `8000`) |
+| `BROKER_MODE` | **Sim** | `paper` (padrão) · `mt5_dry` · `mt5` |
+| `TELEGRAM_TOKEN` | Não | Token do bot — obtido no [@BotFather](https://t.me/BotFather) |
+| `TELEGRAM_CHAT_ID` | Não | ID do chat — via `getUpdates` após enviar `/start` ao bot |
+| `MT5_LOGIN` | Só se MT5 | Número da conta MetaTrader 5 |
+| `MT5_PASSWORD` | Só se MT5 | Senha da conta MT5 |
+| `MT5_SERVER` | Só se MT5 | Nome do servidor (ex: `Clear-PRD`) |
+
+Sem Telegram configurado o sistema opera em modo silencioso (apenas logs locais). Sem MT5, `BROKER_MODE=paper` simula execuções localmente.
+
+#### GitHub Secrets (para automação via GitHub Actions)
+
+Acesse **Settings → Secrets and variables → Actions** no repositório e adicione:
+
+| Secret | Descrição |
+|---|---|
+| `TELEGRAM_TOKEN` | Mesmo valor do `.env` |
+| `TELEGRAM_CHAT_ID` | Mesmo valor do `.env` |
+
+Sem esses secrets o scan diário e o retreinamento semanal rodam normalmente, mas sem enviar notificações.
+
+#### O que customizar no código
+
+| Arquivo | O que mudar |
+|---|---|
+| `autotrader/config/settings.py` | `LIVE_TICKERS` — quais tickers operar ao vivo |
+| `autotrader/config/settings.py` | `TICKERS` — universo completo de pesquisa |
+| `autotrader/config/settings.py` | `RISK_PER_TRADE`, `MAX_DRAWDOWN_PCT` — limites de risco |
+| `data/ticker_params.json` | Gerado automaticamente pelo `grid_search.py`; edite manualmente para ajuste fino |
 
 ---
 
@@ -266,7 +302,7 @@ Para disparar manualmente: **Actions → Scan Diario B3 → Run workflow**
 
 | Estágio | Módulo | Descrição |
 |---------|--------|-----------|
-| 1 | `autotrader.data.pipeline` | Download OHLCV (yfinance), armazena em SQLite incrementalmente |
+| 1 | `autotrader.data.pipeline` | Download OHLCV (yfinance), full upsert no SQLite com guard de anomalia |
 | 2 | `autotrader.features.engineering` | Constrói 37+ features causais |
 | 3 | `autotrader.labeling.barriers` | Rótulos Triple-Barrier (-1/0/+1) |
 | 4 | `autotrader.models.walk_forward` | WFV rolling 24m treino / 6m teste, rastreamento de IC |
@@ -278,40 +314,6 @@ Para disparar manualmente: **Actions → Scan Diario B3 → Run workflow**
 | 10 | `autotrader.execution.engine` | Exporta CSV de sinais + roteamento ao paper broker |
 
 ---
-
-## Configuração
-
-Todos os parâmetros estão centralizados em [autotrader/config/settings.py](autotrader/config/settings.py):
-
-```python
-# Universo de tickers B3
-TICKERS = ["BOVA11.SA", "PETR4.SA", "VALE3.SA", "ITUB4.SA", ...]
-
-# Tickers ao vivo (holdout — melhores 8)
-LIVE_TICKERS = ["PRIO3.SA", "LREN3.SA", "SUZB3.SA", "EQTL3.SA",
-                "ITUB4.SA", "VIVT3.SA", "KLBN11.SA", "BBAS3.SA"]
-
-# Walk-forward
-TRAIN_MONTHS = 24   # 2 anos de treino
-TEST_MONTHS  = 6    # 6 meses de teste
-EMBARGO_BARS = 3    # evita leakage treino->teste
-
-# Parâmetros de execução (substituídos por ticker após grid search)
-MIN_PROBA_THRESHOLD = 0.58   # confiança mínima para gerar sinal
-STOP_LOSS_PCT = 0.010  # 1.0% stop loss
-TAKE_PROFIT_PCT = 0.030  # 3.0% take profit (R:R 3:1)
-TIME_STOP_BARS = 3      # máximo de dias na posição
-
-# Risco
-RISK_PER_TRADE = 0.01   # 1% do capital por trade
-DAILY_STOP_PCT = 0.03   # 3% perda diária -> kill-switch
-MAX_DRAWDOWN_PCT = 0.10   # 10% drawdown -> halt
-
-# Broker
-BROKER_MODE = "paper"   # "paper" | "mt5" | "mt5_dry"
-```
-
-Overrides por ticker são salvos em `data/ticker_params.json` (gerado pelo `grid_search.py`).
 
 ---
 
@@ -383,7 +385,7 @@ pytest tests/test_sanity.py -v
 
 | Módulo | O que testa |
 |--------|-------------|
-| `test_data_pipeline.py` | Operações no banco, atualizações incrementais |
+| `test_data_pipeline.py` | Operações no banco, INSERT OR REPLACE, guard de anomalia |
 | `test_feature_engineering.py` | 37+ features, validação de causalidade |
 | `test_labeling.py` | Triple-Barrier, ATR vs percentual fixo |
 | `test_model_training.py` | Fit LightGBM, Optuna, seleção de features |
@@ -400,7 +402,7 @@ pytest tests/test_sanity.py -v
 
 Este software é apenas para **fins de pesquisa e educação**. Não constitui conselho financeiro. Performance passada em backtest não garante resultados futuros. Trading algorítmico envolve risco financeiro significativo. Use paper trading antes de qualquer capital real.
 
-Os resultados de backtest apresentados são **out-of-sample** (walk-forward validation), não in-sample. Os retornos são modestos por design — a estratégia prioriza baixo drawdown e risco controlado.
+Os resultados de backtest apresentados são **out-of-sample** (walk-forward validation), não in-sample. Os retornos nominais acumulados são altos em termos absolutos, mas cobrem vários anos e não refletem desempenho anualizado. A estratégia prioriza risco controlado (1% por trade, kill-switch em 10% de drawdown).
 
 ---
 
