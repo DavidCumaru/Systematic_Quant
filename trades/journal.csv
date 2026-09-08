@@ -200,3 +200,7 @@ f1f62fb3,2026-09-02,EQTL3.SA,SELL,38.7106,38.9042,37.7429,49,9588.95,0.9035,open
 f1f36301,2026-09-04,SUZB3.SA,SELL,46.7466,46.9803,46.1857,41,9588.95,0.9695,open,,,,,,v2_trend_filter_ticker_params
 0434a052,2026-09-04,EQTL3.SA,SELL,39.4603,39.6576,38.4738,48,9588.95,0.9318,open,,,,,,v2_trend_filter_ticker_params
 40e76ab9,2026-09-04,VIVT3.SA,SELL,30.2848,30.4363,29.7397,63,9588.95,0.7569,open,,,,,,v2_trend_filter_ticker_params
+b331fcd0,2026-09-08,LREN3.SA,SELL,11.5842,11.6421,11.3757,165,9588.95,0.6873,open,,,,,,v2_trend_filter_ticker_params
+a15ed776,2026-09-08,SUZB3.SA,SELL,46.7166,46.9502,46.156,41,9588.95,0.9459,open,,,,,,v2_trend_filter_ticker_params
+c6d61769,2026-09-08,EQTL3.SA,SELL,39.4303,39.6274,38.4445,48,9588.95,0.8359,open,,,,,,v2_trend_filter_ticker_params
+72b69d17,2026-09-08,VIVT3.SA,SELL,30.2149,30.366,29.671,63,9588.95,0.8324,open,,,,,,v2_trend_filter_ticker_params
