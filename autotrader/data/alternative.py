@@ -7,12 +7,15 @@ Todos os dados são obtidos de APIs públicas — sem necessidade de chaves paga
 
 Fontes
 ------
-  1. FRED (Federal Reserve Economic Data) — séries macroeconômicas do Brasil
-     - Taxa de juros longa (IRLTLT01BRM156N) — equivalente à NTN-B longa
-     - SELIC (IRSTCI01BRM156N) — taxa básica de juros
-     - IPCA YoY (BRACPIALLMINMEI) — inflação ao consumidor
+  1. Séries macroeconômicas do Brasil — fontes OFICIAIS brasileiras
+     - Juro longo: Tesouro Direto, taxa do Prefixado com vencimento mais
+       próximo de 10 anos (equivalente à NTN-F de 10 anos), diária
+     - SELIC: Banco Central, SGS 1178 (SELIC efetiva anualizada), diária
+     - IPCA: Banco Central, SGS 433 (variação mensal), convertido em índice
      - Spread longo-SELIC: indicador de inclinação da curva de juros BR
-     Base URL: https://fred.stlouisfed.org/graph/fredgraph.csv?id=SERIES
+     Até set/2026 estas séries vinham do FRED (IRLTLT01BRM156N, IRSTCI01BRM156N,
+     BRACPIALLMINMEI), mas o FRED retirou as séries do Brasil (404) e todos os
+     métodos caíam silenciosamente nos valores default.
 
   2. Proxy de Medo & Ganância (derivado de dados de mercado)
      Índice composto aproximando o sentimento de mercado usando:
@@ -47,8 +50,8 @@ Uso
     # Merge com o DataFrame de features (barras diárias)
     df = df.join(yield_curve, how="left").ffill()
 
-O FRED não requer chave de API para séries públicas (endpoint CSV).
-Se o FRED estiver inacessível, todos os métodos retornam valores default.
+Nenhuma fonte exige chave de API. Se uma fonte estiver inacessível, o método
+correspondente retorna os valores default (e registra um warning).
 """
 
 import logging
@@ -129,6 +132,122 @@ def _fetch_fred(series_id: str) -> pd.Series:
 
 
 # ---------------------------------------------------------------------------
+# Fontes oficiais brasileiras (substituem o FRED para juro longo, SELIC e IPCA)
+# ---------------------------------------------------------------------------
+BCB_SGS_URL = "https://api.bcb.gov.br/dados/serie/bcdata.sgs.{codigo}/dados"
+BCB_SERIES = {
+    "selic": 1178,   # SELIC efetiva anualizada base 252 (% a.a., diária)
+    "ipca":  433,    # IPCA — variação mensal (%)
+}
+TESOURO_DIRETO_URL = (
+    "https://www.tesourotransparente.gov.br/ckan/dataset/"
+    "df56aa42-484a-4a59-8184-7676580c81e3/resource/"
+    "796d2059-14e9-44e3-80c9-2d9e30b405c1/download/PrecoTaxaTesouroDireto.csv"
+)
+_PREFIXADOS = ("Tesouro Prefixado", "Tesouro Prefixado com Juros Semestrais")
+
+
+def _get_with_retry(url: str, params: Optional[dict] = None,
+                    timeout: int = 40, tries: int = 4) -> requests.Response:
+    """A API do BCB responde 502/timeout de vez em quando: tenta de novo."""
+    last_exc: Optional[Exception] = None
+    for attempt in range(tries):
+        try:
+            resp = requests.get(url, params=params, timeout=timeout)
+            if resp.status_code < 500:
+                return resp
+            last_exc = requests.HTTPError(f"HTTP {resp.status_code}")
+        except requests.RequestException as exc:
+            last_exc = exc
+        time.sleep(2 ** attempt)
+    raise last_exc  # type: ignore[misc]
+
+
+def _fetch_sgs(codigo: int, anos: int = 10) -> pd.Series:
+    """
+    Série do SGS/Banco Central como Series (DatetimeIndex tz-naive, float).
+    Séries diárias aceitam no máximo 10 anos por consulta: pedimos ano a ano.
+    Retorna Series vazia em caso de falha.
+    """
+    fim = pd.Timestamp.today().normalize()
+    inicio = fim - pd.DateOffset(years=anos)
+    pontos: dict[pd.Timestamp, float] = {}
+    try:
+        atual = inicio
+        while atual <= fim:
+            ate = min(fim, atual + pd.DateOffset(years=1) - pd.Timedelta(days=1))
+            resp = _get_with_retry(BCB_SGS_URL.format(codigo=codigo), params={
+                "formato": "json",
+                "dataInicial": atual.strftime("%d/%m/%Y"),
+                "dataFinal": ate.strftime("%d/%m/%Y"),
+            })
+            if resp.status_code == 404:          # intervalo sem dados
+                atual = ate + pd.Timedelta(days=1)
+                continue
+            resp.raise_for_status()
+            for item in resp.json():
+                dia = pd.to_datetime(item["data"], format="%d/%m/%Y")
+                if dia <= fim:                   # a SELIC meta traz datas futuras
+                    pontos[dia] = float(item["valor"])
+            atual = ate + pd.Timedelta(days=1)
+    except Exception as exc:
+        logger.warning("BCB SGS %s falhou: %s", codigo, exc)
+        return pd.Series(dtype=float, name=f"sgs_{codigo}")
+    serie = pd.Series(pontos, name=f"sgs_{codigo}", dtype=float).sort_index()
+    logger.info("BCB SGS %s: %d observações [%s -> %s]", codigo, serie.count(),
+                serie.first_valid_index(), serie.last_valid_index())
+    return serie
+
+
+def _fetch_ipca_index(anos: int = 20) -> pd.Series:
+    """
+    IPCA como ÍNDICE (base 100 no início), montado a partir da variação mensal
+    (SGS 433). Mantém o contrato da antiga série do FRED (BRACPIALLMINMEI, um
+    nível), então cpi_yoy() continua calculando IPCA_t / IPCA_{t-12} - 1.
+    """
+    var_mensal = _fetch_sgs(BCB_SERIES["ipca"], anos=anos)
+    if var_mensal.empty:
+        return pd.Series(dtype=float, name="ipca_indice")
+    indice = 100 * (1 + var_mensal / 100).cumprod()
+    return indice.rename("ipca_indice")
+
+
+def _fetch_juro_longo_tesouro(prazo_anos: float = 10.0) -> pd.Series:
+    """
+    Juro nominal longo diário: para cada data, a taxa de compra (manhã) do
+    Tesouro Prefixado (com ou sem cupom) cujo vencimento é o mais próximo de
+    `prazo_anos` — o equivalente brasileiro do "10-year" que vinha do FRED.
+    Arquivo oficial do Tesouro Transparente (~15 MB, histórico completo).
+    """
+    try:
+        resp = _get_with_retry(TESOURO_DIRETO_URL, timeout=120)
+        resp.raise_for_status()
+        from io import StringIO
+        df = pd.read_csv(StringIO(resp.content.decode("latin-1")), sep=";", decimal=",")
+        df = df[df["Tipo Titulo"].isin(_PREFIXADOS)].copy()
+        df["base"] = pd.to_datetime(df["Data Base"], format="%d/%m/%Y")
+        df["venc"] = pd.to_datetime(df["Data Vencimento"], format="%d/%m/%Y")
+        df["dist"] = ((df["venc"] - df["base"]).dt.days / 365.25 - prazo_anos).abs()
+        df = df.dropna(subset=["Taxa Compra Manha"])
+        escolhidos = df.sort_values("dist").groupby("base", as_index=True).head(1)
+        serie = escolhidos.set_index("base")["Taxa Compra Manha"].astype(float).sort_index()
+    except Exception as exc:
+        logger.warning("Tesouro Direto (juro longo) falhou: %s", exc)
+        return pd.Series(dtype=float, name="juro_longo")
+    serie.name = "juro_longo"
+    logger.info("Tesouro Direto juro longo: %d observações [%s -> %s]", serie.count(),
+                serie.first_valid_index(), serie.last_valid_index())
+    return serie
+
+
+_MACRO_FETCHERS = {
+    "juro_longo": _fetch_juro_longo_tesouro,
+    "selic":      lambda: _fetch_sgs(BCB_SERIES["selic"]),
+    "ipca":       _fetch_ipca_index,
+}
+
+
+# ---------------------------------------------------------------------------
 # Alternative Data Loader
 # ---------------------------------------------------------------------------
 
@@ -158,6 +277,16 @@ class AlternativeDataLoader:
             self._cache[series_id] = data
         return data
 
+    def _get_macro(self, nome: str) -> pd.Series:
+        """juro_longo / selic / ipca, das fontes oficiais brasileiras (com cache)."""
+        chave = f"macro:{nome}"
+        if self._use_cache and chave in self._cache:
+            return self._cache[chave]
+        data = _MACRO_FETCHERS[nome]()
+        if self._use_cache:
+            self._cache[chave] = data
+        return data
+
     # ------------------------------------------------------------------
     def yield_curve(self) -> pd.DataFrame:
         """
@@ -170,14 +299,14 @@ class AlternativeDataLoader:
         spread_10_2 : Spread longo-SELIC (inclinação da curva)
         inverted    : 1 se spread < 0 (curva invertida = alerta recessivo)
 
-        Defaults (quando FRED indisponível):
+        Defaults (quando a fonte oficial estiver indisponível):
           t10y=12.0, t2y=10.5, spread=1.5, inverted=0
         """
-        juro_longo_s = self._get_fred(FRED_SERIES["juro_longo"])
-        selic_s      = self._get_fred(FRED_SERIES["selic"])
+        juro_longo_s = self._get_macro("juro_longo")
+        selic_s      = self._get_macro("selic")
 
         if juro_longo_s.empty and selic_s.empty:
-            logger.warning("Curva de juros BR: FRED indisponível — usando defaults")
+            logger.warning("Curva de juros BR: Tesouro Direto e BCB indisponíveis — usando defaults")
             idx = pd.date_range("2000-01-03", periods=1, freq="B")
             return pd.DataFrame(
                 {"t10y": 12.0, "t2y": 10.5, "spread_10_2": 1.5, "inverted": 0},
@@ -205,11 +334,11 @@ class AlternativeDataLoader:
         Taxa SELIC — política monetária brasileira.
 
         Retorna uma Series diária (forward-filled das divulgações mensais).
-        Default: 10.5% quando FRED indisponível.
+        Default: 10.5% quando o BCB estiver indisponível.
         """
-        selic = self._get_fred(FRED_SERIES["selic"])
+        selic = self._get_macro("selic")
         if selic.empty:
-            logger.warning("SELIC: FRED indisponível — usando default 10.5%%")
+            logger.warning("SELIC: BCB indisponível — usando default 10.5%%")
             return pd.Series(dtype=float, name="fedfunds")
 
         daily_idx = pd.date_range(selic.first_valid_index(), selic.last_valid_index(), freq="B")
@@ -224,11 +353,11 @@ class AlternativeDataLoader:
             ipca_yoy = (IPCA_t / IPCA_{t-12} - 1) * 100
 
         Retorna uma Series diária (forward-filled).
-        Default: 4.5% quando FRED indisponível.
+        Default: 4.5% quando o BCB estiver indisponível.
         """
-        ipca = self._get_fred(FRED_SERIES["ipca"])
+        ipca = self._get_macro("ipca")
         if ipca.empty:
-            logger.warning("IPCA: FRED indisponível — usando default 4.5%%")
+            logger.warning("IPCA: BCB indisponível — usando default 4.5%%")
             return pd.Series(dtype=float, name="cpi_yoy")
 
         yoy = (ipca / ipca.shift(12) - 1) * 100
