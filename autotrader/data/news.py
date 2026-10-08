@@ -7,7 +7,8 @@ Três fontes implementadas:
   1. Fatos Relevantes (CVM) — divulgações obrigatórias: resultados, dividendos,
      fusões, etc. Feature binária: houve fato relevante nos últimos N dias.
 
-  2. Sentimento de manchetes — RSS do InfoMoney + Valor Econômico.
+  2. Sentimento de manchetes — RSS do InfoMoney, Valor Econômico e Money Times,
+     mais uma busca do Google Notícias por ticker (últimos 30 dias).
      Score positivo/negativo por ticker. Abordagem lexicon-based em português.
 
   3. Surpresa de resultados (CVM DFP/ITR) — compara lucro líquido divulgado
@@ -27,10 +28,12 @@ Uso:
 
 import io
 import logging
+import re
 import time
 import zipfile
 from pathlib import Path
 from typing import Optional
+from urllib.parse import quote_plus
 
 import numpy as np
 import pandas as pd
@@ -57,38 +60,55 @@ _IPE_MATERIAL_CATS = {
     "Oferta Publica", "Mudança de Controle",
 }
 
+# Feeds gerais (filtrados por palavra-chave do ticker).
+# O feed da Reuters Brasil (br.reuters.com/rssFeed/businessNews) foi desativado
+# e responde 401 - por isso so o InfoMoney alimentava o sentimento. Conferidos
+# em 23/09/2026: todos respondem 200 com itens.
 _RSS_SOURCES = [
-    "https://www.infomoney.com.br/feed/",
-    "https://br.reuters.com/rssFeed/businessNews",
+    "https://www.infomoney.com.br/feed/",   # ~10 itens
+    "https://pox.globo.com/rss/valor/",     # Valor Economico, ~100 itens
+    "https://www.moneytimes.com.br/feed/",  # ~10 itens
 ]
 
+# Busca do Google Noticias POR TICKER (ultimos 30 dias, ~100 itens). Os feeds
+# gerais trazem so as ~10 ultimas manchetes de qualquer assunto, o que deixava
+# as janelas de 5 e 10 dias do sentimento quase sempre vazias.
+_GOOGLE_NEWS_URL = (
+    "https://news.google.com/rss/search?q={query}+when:{days}d"
+    "&hl=pt-BR&gl=BR&ceid=BR:pt-419"
+)
+
 # Mapeamento ticker → código CVM (CD_CVM)
+# Conferido em 23/09/2026 contra o cadastro oficial:
+#   https://dados.cvm.gov.br/dados/CIA_ABERTA/CAD/DADOS/cad_cia_aberta.csv
+# 16 dos 25 codigos anteriores apontavam para OUTRA empresa ou para codigos
+# inexistentes (ex.: VIVT3 usava o da Magazine Luiza, GGBR4 o da Vale).
 _TICKER_TO_CVM: dict[str, int] = {
-    "BBAS3.SA":  1023,
-    "ITUB4.SA":  19348,   # Itaú Unibanco Holding
-    "PRIO3.SA":  22187,   # PetroRio
-    "EQTL3.SA":  16608,   # Equatorial Energia (holding)
-    "LREN3.SA":  8133,
-    "SUZB3.SA":  4065,
-    "VIVT3.SA":  22470,   # Telefônica Brasil
-    "CSNA3.SA":  4030,
-    "KLBN11.SA": 12653,
-    "CYRE3.SA":  14460,
-    "VALE3.SA":  4170,
-    "PETR4.SA":  9512,
-    "WEGE3.SA":  5410,
-    "ABEV3.SA":  14761,   # também usado por LREN no passado; ABEV = 14761 não encontrado, placeholder
-    "MGLU3.SA":  20303,
-    "RENT3.SA":  14869,
-    "RADL3.SA":  16284,
-    "BEEF3.SA":  16152,
-    "GGBR4.SA":  4170,
-    "CSAN3.SA":  18724,
-    "TIMS3.SA":  22640,
-    "MRVE3.SA":  20532,
-    "SBSP3.SA":  5444,
-    "TOTS3.SA":  10629,
-    "UGPA3.SA":  12441,
+    "BBAS3.SA":  1023,    # Banco do Brasil S.A.
+    "ITUB4.SA":  19348,   # Itaú Unibanco Holding S.A.
+    "PRIO3.SA":  22187,   # PRIO S.A. (ex-PetroRio)
+    "EQTL3.SA":  20010,   # Equatorial S.A.            (era 16608 = Equatorial Maranhão, subsidiária)
+    "LREN3.SA":  8133,    # Lojas Renner S.A.
+    "SUZB3.SA":  13986,   # Suzano S.A.                (era 4065 = Cia Suzano de Papel, antiga)
+    "VIVT3.SA":  17671,   # Telefônica Brasil S.A.     (era 22470 = Magazine Luiza)
+    "CSNA3.SA":  4030,    # Cia Siderúrgica Nacional
+    "KLBN11.SA": 12653,   # Klabin S.A.
+    "CYRE3.SA":  14460,   # Cyrela Brazil Realty
+    "VALE3.SA":  4170,    # Vale S.A.
+    "PETR4.SA":  9512,    # Petróleo Brasileiro S.A. - Petrobras
+    "WEGE3.SA":  5410,    # WEG S.A.
+    "ABEV3.SA":  23264,   # Ambev S.A.                 (era 14761 = Cia Hering)
+    "MGLU3.SA":  22470,   # Magazine Luiza S.A.        (era 20303 = Cemig Distribuição)
+    "RENT3.SA":  19739,   # Localiza Rent a Car S.A.   (era 14869 = Coelce)
+    "RADL3.SA":  5258,    # Raia Drogasil S.A.         (era 16284 = 524 Participações)
+    "BEEF3.SA":  20931,   # Minerva S.A.               (era 16152 = Telet)
+    "GGBR4.SA":  3980,    # Gerdau S.A.                (era 4170 = Vale)
+    "CSAN3.SA":  19836,   # Cosan S.A.                 (era 18724 = Bradespar)
+    "TIMS3.SA":  24929,   # TIM S.A.                   (era 22640 = Nisa Participações)
+    "MRVE3.SA":  20915,   # MRV Engenharia             (era 20532 = Santander Brasil)
+    "SBSP3.SA":  14443,   # Sabesp                     (era 5444 = Elgin Máquinas)
+    "TOTS3.SA":  19992,   # TOTVS S.A.                 (era 10629 = código inexistente)
+    "UGPA3.SA":  18465,   # Ultrapar Participações     (era 12441 = código inexistente)
 }
 
 # Mapeamento ticker → palavras-chave para filtrar manchetes
@@ -119,6 +139,35 @@ _TICKER_KEYWORDS: dict[str, list[str]] = {
     "TOTS3.SA":  ["totvs", "tots"],
     "UGPA3.SA":  ["ultrapar", "ultra", "ugpa"],
 }
+
+# Expressões que contêm a palavra-chave mas NÃO falam da empresa. Com a busca
+# do Google Notícias (muito mais manchetes), elas passaram a aparecer bastante:
+# ex.: "ibovespa hoje ao vivo" contava como Vivo e "margem equatorial" (região
+# do petróleo) como Equatorial.
+_FALSOS_POSITIVOS: dict[str, list[str]] = {
+    "VIVT3.SA": ["ao vivo"],
+    # Suzano também é uma cidade da Grande SP
+    "SUZB3.SA": ["prefeitura de suzano", "gcm de suzano", "câmara de suzano", "cidade de suzano",
+                 "suzano (sp)", "suzano-sp", "em suzano"],
+    "EQTL3.SA": ["margem equatorial", "guiné equatorial", "linha do equador"],
+    "VALE3.SA": ["vale a pena", "vale-refeição", "vale refeição", "vale-alimentação",
+                 "vale alimentação", "vale-gás", "vale gás", "vale do silício"],
+}
+
+
+def _menciona(text: str, ticker: str, keywords: list[str]) -> bool:
+    """
+    A manchete cita o ticker? Palavra INTEIRA (antes era substring: 'prio'
+    casava 'prioridade') e sem as expressões de _FALSOS_POSITIVOS.
+    """
+    for frase in _FALSOS_POSITIVOS.get(ticker, []):
+        text = text.replace(frase, " ")
+    for kw in keywords:
+        kw = kw.strip(" ,.")
+        if kw and re.search(rf"(?<!\w){re.escape(kw)}(?!\w)", text):
+            return True
+    return False
+
 
 # Léxico financeiro em português: palavras positivas e negativas
 _POSITIVE_WORDS = {
@@ -350,18 +399,33 @@ class NewsDataLoader:
 
         keywords = _TICKER_KEYWORDS.get(ticker, [ticker.replace(".SA", "").lower()])
         results  = []
+        seen: set[str] = set()
 
-        for rss_url in _RSS_SOURCES:
+        # Feeds gerais + uma busca do Google Noticias so deste ticker
+        code  = ticker.replace(".SA", "")
+        query = quote_plus(f'{code} OR "{keywords[0].strip()}"')
+        sources = _RSS_SOURCES + [_GOOGLE_NEWS_URL.format(query=query, days=days_back)]
+
+        for rss_url in sources:
             try:
                 feed = feedparser.parse(rss_url)
+                if not feed.entries:
+                    # warning (e nao debug): foi assim que o feed morto da
+                    # Reuters passou despercebido
+                    logger.warning("RSS sem itens (%s): status=%s bozo=%s",
+                                   rss_url[:80], feed.get("status"), feed.get("bozo_exception"))
                 for entry in feed.entries:
                     title = entry.get("title", "").lower()
                     summary = entry.get("summary", "").lower()
                     text = title + " " + summary
 
-                    # Verifica se é sobre o ticker
-                    if not any(kw in text for kw in keywords):
+                    # Verifica se é sobre o ticker (palavra inteira, sem falsos positivos)
+                    if not _menciona(text, ticker, keywords):
                         continue
+                    # A mesma manchete pode vir de mais de um feed
+                    if title in seen:
+                        continue
+                    seen.add(title)
 
                     # Data
                     pub = entry.get("published_parsed") or entry.get("updated_parsed")
